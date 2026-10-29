@@ -24,6 +24,8 @@ top-level `.py` modules as a shared library.
   as scripts (`python sham_pipeline.py`), not imported — they read fixed cache paths, do the analysis, show
   plots, and write outputs. There are no CLI args; edit the constants at the top of the file to change
   inputs (e.g. `file_number`, `directory`, mass bin edges).
+- The MultiCAM clustering scripts (`mcam_hydro_only.py`, `mcam_vs_cam.py`) are run through Slurm with their
+  matching `.sbatch` files, not on the login node — the jackknife ξ(r) runs need more CPUs than it allows.
 - No automated tests exist.
 
 ## Core pipeline (read this before touching multiple files)
@@ -40,44 +42,48 @@ top-level `.py` modules as a shared library.
 3. **Sample matching** (`sample.py`): both catalogs are mass-cut and the DMO catalog is truncated to the
    same length as the hydro catalog (abundance matching assumption — same number density in both).
 4. **Prediction methods**, all built on `qt()` (quantile transform: rank-match values in `x` onto the
-   distribution of `y`), duplicated identically in `sham.py` and `cam.py`:
+   distribution of `y`), defined once in `qt.py` and imported by `sham.py` and `cam.py`:
    - `sham.sham(proxy, observed)` — single-variable Subhalo Abundance Matching (e.g. `vpeak` → stellar mass).
    - `cam.cam(proxy, observed, cond_proxy, cond_observed, mass_min, mass_max)` — Conditional Abundance
      Matching: within a stellar-mass bin, rank-match a secondary halo property (e.g. `a12`/`z12`) onto a
      secondary galaxy property (e.g. `g-i` color).
-   - **MultiCAM** (`analysis/multicam/`, helpers in `multicam_tng_utils.py`) generalizes CAM to condition on
-     multiple halo-history features at once (full MAH, `a_n` values derived via `get_an_from_mpeak_mah`,
-     `mpeak`, etc.) — this is the primary/current line of work (see recent commits and
-     `MultiCAM Code Organization.pdf`).
+   - **MultiCAM** (helpers in `multicam_tng_utils.py`; notebooks `tutorials/multicam_*.ipynb`,
+     `multicam_hydro_hydro.ipynb` and `thesis/`; clustering scripts `mcam_*.py`) generalizes CAM to condition
+     on multiple halo-history features at once (full MAH, `a_n` values derived via `get_an_from_mpeak_mah`,
+     `mpeak`, etc.) — this is the primary/current line of work (see `MultiCAM Code Organization.pdf`).
 5. **Validation via clustering** (`stats.py`, `plot.py`, `halotools.mock_observables.tpcf_jackknife`):
    predicted and true galaxy populations are split into mass/color bins, a two-point correlation function
-   ξ(r) is computed with jackknife errors over a periodic box (`Lbox = 110.7 * TNG_H`), and predicted vs.
+   ξ(r) is computed with jackknife errors over a periodic box (`LBOX = 110.7 * TNG_H`), and predicted vs.
    true clustering is compared — this is the real test of whether a method works, beyond matching 1D
-   distributions. Results are also compared against the external **Favole** mock/observational catalog
-   (`analysis/favole/`).
-6. Figures are saved via `plot.save_figures_as_png` into `figures/` (with `figures/old/` holding
-   superseded versions); intermediate results (e.g. `tpcf_results`) are cached with `pickle`.
+   distributions. `paths.py` also defines `FAVOLE_RAW_DIR` for the external **Favole** catalog, but no
+   Favole comparison notebooks are currently in the repo.
+6. Figures are saved via `plot.save_figures_as_png` into `figures/` (git-ignored — outputs are not
+   committed); intermediate results (e.g. `tpcf_results`) are cached with `pickle`.
 
-`TNG_H = 0.6774` (the TNG100 little-h) and TNG's `1e10 Msun/h` mass unit convention recur throughout — watch
-for double-counting `h` factors when combining functions from different modules.
+Shared constants live in `constants.py`: `TNG_H = 0.6774` (the TNG100 little-h), `LBOX`, and mass cuts. TNG's
+`1e10 Msun/h` mass unit convention recurs throughout — watch for double-counting `h` factors when combining
+functions from different modules.
 
 ## Repository layout
 
-- Top-level `.py` files: the shared library (`data`, `cache`, `sample`, `sham`, `cam`, `stats`, `plot`) and
-  standalone pipeline scripts (`cam_pipeline.py`, `sham_pipeline.py`).
-- `analysis/` — exploratory notebooks grouped by method (`cam/`, `sham/`, `multicam/`, `qt/`, `tpcf/`,
-  `favole/` comparisons, `tutorials/`, `other/` for cache-building/debug notebooks).
-- `thesis/` — polished notebooks producing final write-up figures (SHMR, MAH, corner plots, color-CAM
-  comparisons); treat these as the "current best" versions of analyses that also exist in draft form under
-  `analysis/`.
-- `figures/` — output plots. All repo folders use lowercase names by convention.
+- Top-level `.py` files: the shared library (`data`, `cache`, `sample`, `qt`, `sham`, `cam`, `stats`, `plot`,
+  `constants`, `paths`, `multicam_tng_utils`) and standalone pipeline scripts (`cam_pipeline.py`,
+  `sham_pipeline.py`, `mcam_hydro_only.py`, `mcam_vs_cam.py`, the latter two with `.sbatch` files).
+- `multicam_hydro_hydro.ipynb` — top-level MultiCAM notebook (hydro → hydro).
+- `tutorials/` — exploratory and tutorial notebooks (CAM, SHAM, halotools, MultiCAM variants, corner plots).
+- `thesis/` — polished notebooks producing final write-up figures (SHMR, MAH, corner plots, CAM vs.
+  MultiCAM); treat these as the "current best" versions of analyses that also exist in draft form under
+  `tutorials/`.
+- `data/` and `figures/` — local only, git-ignored. All repo folders use lowercase names by convention.
 
 ## Working in this codebase
 
-- `sham.py` and `cam.py` both define their own copy of `qt()` — if you fix a bug in one, check the other.
 - Path handling is centralized in `paths.py` (repo-root constants for `data/`, `data/cache_files/`,
   `figures/`, etc.) — import from it rather than hardcoding path strings in `.py` files. Notebooks
-  still use plain relative string literals (e.g. `'data/cache_files/...'`), which work because Jupyter
-  is run with cwd = repo root.
+  (including those in `tutorials/` and `thesis/`) still use plain relative string literals
+  (e.g. `'data/cache_files/...'`), so the Jupyter kernel's working directory must be the repo root, not
+  the notebook's own folder.
+- This repo is public. Never commit data, outputs, absolute paths, or personal details — e.g. keep
+  `#SBATCH --mail-user=...` only in local copies of the `.sbatch` files.
 - When adding a new analysis notebook, follow the existing convention: read pre-built CSV caches from
   `data/cache_files/`, not raw HDF5, unless you are specifically regenerating the cache.
