@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import pickle
-from scipy.stats import spearmanr
+from scipy.stats import spearmanr, ks_2samp
 import stats
 import cam
 import paths
@@ -15,21 +15,28 @@ from multicam.multicam import MultiCAM, MultiCamSampling
 # scatter, reduces to the CAM implementation in cam.py inside the same stellar-mass bins.
 # No DMO data is used: every halo property comes from the hydro catalog's own trees.
 #
-# CAM: stellar mass is assigned by SHAM of hydro mpeak (peak total SubhaloMass) onto the
-# hydro stellar mass distribution; within each SHAM stellar-mass bin, hydro z12 is then
-# rank-matched onto the hydro g-i distribution of the true stellar-mass bin.
+# Stellar mass is assigned in one of two ways (SHAM_STELLAR_MASS):
+# - True: SHAM of hydro mpeak (peak total SubhaloMass) onto the hydro stellar mass
+#   distribution, giving a SHAM stellar-mass bin that differs from the true one.
+# - False: the true hydro stellar mass (passed to cam.cam as its own SHAM proxy, which
+#   qt maps onto itself exactly), so the SHAM bin is the true bin.
 #
-# MultiCAM: uses the same SHAM stellar-mass bins as CAM. It is fit on the (z12, g-i) pairs
-# of the true stellar-mass bin and applied to the z12 of the SHAM bin, so both methods
-# predict colors for the same galaxies. With no scatter, MultiCAM ranks SHAM-bin z12
-# against the training (true-bin) z12, whereas CAM ranks it against itself, so any shift
-# in the z12 distribution between the two bins shows up as a CAM - MultiCAM difference.
+# CAM: within each SHAM stellar-mass bin, hydro z12 is rank-matched onto the hydro g-i
+# distribution of the true stellar-mass bin.
+#
+# MultiCAM: fit on the (z12, g-i) pairs of the true stellar-mass bin and applied to the
+# z12 of the SHAM bin, so both methods predict colors for the same galaxies. With no
+# scatter, MultiCAM ranks SHAM-bin z12 against the training (true-bin) z12, whereas CAM
+# ranks it against itself, so any shift in the z12 distribution between the two bins
+# shows up as a CAM - MultiCAM difference. With true stellar masses the two z12
+# distributions are identical, so MultiCAM should reproduce CAM up to interpolation.
 
 COLOR_CUT = 0.85
 N_THREADS = 16
 N_SAMPLES = 100
 SAMPLE_PCTILES = (16, 84)
 RUN_SAMPLING = False  # MultiCamSampling (scatter) mode; slow because of the N_SAMPLES tpcf draws
+SHAM_STELLAR_MASS = True  # True: SHAM mpeak -> stellar mass; False: true hydro stellar mass (pure reduction test)
 
 ## Load data ###
 hydro_full = pd.read_csv(paths.HYDRO_COLOR_TREE_CACHE, usecols=['SubhaloMass', 'StellarMass', 'x', 'y', 'z',
@@ -53,15 +60,18 @@ mass_bins = {f'bin{i+1}': edges for i, edges in enumerate(MASS_BIN_EDGES)}
 
 results = {}
 diagnostics = []
+mass_proxy = 'mpeak' if SHAM_STELLAR_MASS else 'logStellarMass'
 
 for key, (low, high) in mass_bins.items():
-    # CAM: mpeak -> SHAM stellar mass, then z12 -> g-i in the SHAM bin
+    # CAM: mass proxy -> SHAM stellar mass, then z12 -> g-i in the SHAM bin
     color_bin, color_pred_cam, mask_gal, mask_sham = cam.cam(
-        hydro_full['mpeak'].to_numpy(),
+        hydro_full[mass_proxy].to_numpy(),
         hydro_full['logStellarMass'].to_numpy(),
         hydro_full['z12'].to_numpy(),
         hydro_full['g-i'].to_numpy(),
         low, high)
+    if not SHAM_STELLAR_MASS:
+        assert np.array_equal(mask_gal, mask_sham)
 
     hydro_bin = hydro_full[mask_gal].copy()  # truth and MultiCAM training set (true stellar mass)
     cam_bin = hydro_full[mask_sham].copy()   # CAM and MultiCAM population (SHAM stellar mass)
@@ -93,8 +103,18 @@ for key, (low, high) in mass_bins.items():
     diff = color_pred_mcam - color_pred_cam
     # fraction of true-bin galaxies that SHAM also places in the bin
     overlap_frac = len(cam_bin.index.intersection(hydro_bin.index)) / len(hydro_bin)
+    # galaxies in only one of the two bins: SHAM swaps these in/out of the true bin
+    sham_only = cam_bin.loc[cam_bin.index.difference(hydro_bin.index)]
+    hydro_only = hydro_bin.loc[hydro_bin.index.difference(cam_bin.index)]
+    ks_z12 = ks_2samp(hydro_bin['z12'], cam_bin['z12']).statistic
     print(f"\n{key} [{low}, {high}): N_hydro = {len(hydro_bin)}, N_sham = {len(cam_bin)}, "
           f"SHAM/true bin overlap = {overlap_frac:.3f}")
+    print(f"  median z12 true / SHAM bin (KS):              {hydro_bin['z12'].median():.3f} / "
+          f"{cam_bin['z12'].median():.3f} ({ks_z12:.3f})")
+    print(f"  median z12 true-only / SHAM-only:             {hydro_only['z12'].median():.3f} / "
+          f"{sham_only['z12'].median():.3f}")
+    print(f"  satellite fraction true / SHAM bin:           {hydro_bin['is_sub'].mean():.3f} / "
+          f"{cam_bin['is_sub'].mean():.3f}")
     print(f"  Spearman(z12, g-i) in hydro training set:     {rho_train:.3f}")
     print(f"  Spearman(CAM, MultiCAM no scatter):           {rho_mcam:.4f}")
     print(f"  max |CAM - MultiCAM no scatter|:              {np.max(np.abs(diff)):.4f}")
@@ -102,6 +122,13 @@ for key, (low, high) in mass_bins.items():
     diag = {'bin': key, 'logmstar_min': low, 'logmstar_max': high,
             'n_hydro': len(hydro_bin), 'n_sham': len(cam_bin),
             'overlap_frac': overlap_frac,
+            'median_z12_hydro': hydro_bin['z12'].median(),
+            'median_z12_sham': cam_bin['z12'].median(),
+            'ks_z12': ks_z12,
+            'median_z12_hydro_only': hydro_only['z12'].median(),
+            'median_z12_sham_only': sham_only['z12'].median(),
+            'sat_frac_hydro': hydro_bin['is_sub'].mean(),
+            'sat_frac_sham': cam_bin['is_sub'].mean(),
             'spearman_train_z12_gi': rho_train,
             'spearman_cam_mcam': rho_mcam,
             'max_abs_diff_mcam_cam': np.max(np.abs(diff)),
@@ -129,11 +156,12 @@ for key, (low, high) in mass_bins.items():
     diagnostics.append(diag)
 
     results[key] = {'hydro': hydro_bin, 'cam': cam_bin,
+                    'hydro_only': hydro_only, 'sham_only': sham_only,
                     'color_pred_samp_draws': color_pred_samp_draws}
 
 print("\nCAM and MultiCAM predictions complete for all bins.")
 
-suffix = '_hydro' + ('_with_sampling' if RUN_SAMPLING else '')
+suffix = '_hydro' + ('' if SHAM_STELLAR_MASS else '_true_mstar') + ('_with_sampling' if RUN_SAMPLING else '')
 paths.CACHE_DIR.mkdir(parents=True, exist_ok=True)
 diagnostics_file = paths.CACHE_DIR / f'mcam_vs_cam_diagnostics{suffix}.csv'
 pd.DataFrame(diagnostics).to_csv(diagnostics_file, index=False)
@@ -160,6 +188,29 @@ for i, key in enumerate(mass_bins.keys()):
 
     if i == 0:
         plt.legend()
+
+plt.tight_layout()
+plt.show()
+
+
+### Histogram of z12 in the true vs. SHAM stellar-mass bin ###
+fig_z12, axes = plt.subplots(1, len(mass_bins), figsize=(18, 4))
+for i, key in enumerate(mass_bins.keys()):
+    res = results[key]
+    ax = axes[i]
+    z12_bins = np.linspace(0, res['hydro']['z12'].quantile(0.99), 40)
+    ax.hist(res['hydro']['z12'], bins=z12_bins, density=True, alpha=0.4, color='gray', label='True bin')
+    ax.hist(res['cam']['z12'], bins=z12_bins, density=True, histtype='step', linewidth=2, color='k', label='SHAM bin')
+    # empty in true stellar-mass mode
+    if len(res['hydro_only']):
+        ax.hist(res['hydro_only']['z12'], bins=z12_bins, density=True, histtype='step', linewidth=2, linestyle='--', color='tab:red', label='True bin only')
+        ax.hist(res['sham_only']['z12'], bins=z12_bins, density=True, histtype='step', linewidth=2, linestyle='--', color='tab:blue', label='SHAM bin only')
+    low, high = mass_bins[key]
+    ax.set_title(fr'${low} \leq \log(M_*/h^{{-1}}M_\odot) < {high}$')
+    ax.set_xlabel(r'$z_{1/2}$')
+    if i == 0:
+        ax.set_ylabel('Normalized frequency')
+        ax.legend()
 
 plt.tight_layout()
 plt.show()
@@ -276,20 +327,20 @@ for i, key in enumerate(mass_bins.keys()):
         err_cam = stats.compute_tpcf_jackknife_errors(cov_cam)
         err_mcam = stats.compute_tpcf_jackknife_errors(cov_mcam)
         label = color.capitalize()
-        mcam_color = 'k' if color == 'red' else 'gray'
+        truth_color = 'gray' if color == 'red' else 'k'
 
-        ax.plot(rbin_centers, xi_hydro, marker='o', color=color, label=fr'Truth {label}: TNG100 Hydro $\xi(r)$')
-        ax.fill_between(rbin_centers, xi_hydro - err, xi_hydro + err, color=color, alpha=0.2)
+        ax.plot(rbin_centers, xi_hydro, marker='o', color=truth_color, label=fr'Truth {label}: TNG100 Hydro $\xi(r)$')
+        ax.fill_between(rbin_centers, xi_hydro - err, xi_hydro + err, color=truth_color, alpha=0.2)
         ax.errorbar(r_cam, xi_cam, yerr=err_cam, marker='s', color=color, linestyle='--', capsize=2, label=fr'Prediction {label}: CAM $\xi(r)$')
-        ax.errorbar(r_mcam, xi_mcam, yerr=err_mcam, marker='x', color=mcam_color, linestyle=':', capsize=2, label=fr'Prediction {label}: MultiCAM $\xi(r)$')
+        ax.errorbar(r_mcam, xi_mcam, yerr=err_mcam, marker='x', color=color, linestyle='-', capsize=2, label=fr'Prediction {label}: MultiCAM $\xi(r)$')
         if samp is not None:
             xi_s, xi_s_lo, xi_s_hi = samp
             ax.plot(rbin_centers, xi_s, color='magenta' if color == 'red' else 'cyan', linestyle='-.', label=fr'Prediction {label}: MultiCAM Sampling $\xi(r)$ (median of {N_SAMPLES})')
             ax.fill_between(rbin_centers, xi_s_lo, xi_s_hi, color='magenta' if color == 'red' else 'cyan', alpha=0.2)
 
-        rax.fill_between(rbin_centers, 1 - err / xi_hydro, 1 + err / xi_hydro, color=color, alpha=0.2)
+        rax.fill_between(rbin_centers, 1 - err / xi_hydro, 1 + err / xi_hydro, color=truth_color, alpha=0.2)
         rax.errorbar(r_cam, xi_cam / xi_hydro, yerr=err_cam / xi_hydro, marker='s', color=color, linestyle='--', capsize=2)
-        rax.errorbar(r_mcam, xi_mcam / xi_hydro, yerr=err_mcam / xi_hydro, marker='x', color=mcam_color, linestyle=':', capsize=2)
+        rax.errorbar(r_mcam, xi_mcam / xi_hydro, yerr=err_mcam / xi_hydro, marker='x', color=color, linestyle='-', capsize=2)
         if samp is not None:
             rax.plot(rbin_centers, xi_s / xi_hydro, color='magenta' if color == 'red' else 'cyan', linestyle='-.')
 
@@ -311,6 +362,7 @@ plt.show()
 ### Save figures as PNG files ###
 figure_names = {
     f'mcam_vs_cam_color_hist{suffix}': fig0,
+    f'mcam_vs_cam_z12_hist{suffix}': fig_z12,
     f'mcam_vs_cam_color_scatter{suffix}': fig1,
     f'mcam_vs_cam_red_blue_tpcf{suffix}': fig2,
 }

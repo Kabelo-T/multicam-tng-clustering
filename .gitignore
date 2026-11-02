@@ -173,6 +173,7 @@ data/
 *.csv
 *.dat
 figures/
+tests/**/*.png
 
 # Local scratch / editor
 _smoke_*.py
