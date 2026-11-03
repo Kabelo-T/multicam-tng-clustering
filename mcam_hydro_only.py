@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import pickle
 from scipy.stats import spearmanr
 import stats
+import plot
 import paths
 from constants import LBOX, HYDRO_STELLAR_MASS_MIN, MASS_BIN_EDGES
 from halotools.mock_observables import return_xyz_formatted_array
@@ -215,32 +216,16 @@ plt.show()
 
 
 ### Histogram of color vs. predicted color, per stellar-mass bin ###
-fig_color = plt.figure(figsize=(18, 4))
-
-for i, key in enumerate(mass_bins.keys()):
-    plt.subplot(1, len(mass_bins), i+1)
-
-    res = results[key]
-    color_hist_bins = np.linspace(hydro_full['g-i'].min(), hydro_full['g-i'].max(), 40)
-    plt.hist(res['hydro']['color'], bins=color_hist_bins, density=True, color='gray', alpha=0.4,
-             label='True color (Hydro)')
-    for name in FEATURE_SETS:
-        if RUN_SAMPLING:
-            color_pred = np.concatenate([c for _, c in res['samp_draws'][name]])
-        else:
-            color_pred = res[name][f'color_pred_{name}']
-        plt.hist(color_pred, bins=color_hist_bins, density=True, histtype='step', linewidth=2,
-                 color=SET_COLORS[name], label=FEATURE_LABELS[name] + mode_label)
-    plt.axvline(COLOR_CUT, color='k', linestyle='--')
-    low, high = mass_bins[key]
-    plt.title(fr'${low} \leq \log(M_*/h^{{-1}}M_\odot) < {high}$')
-    plt.xlabel(r'$g - i$ color')
-    plt.ylabel('Normalized frequency')
-
-    if i == 0:
-        plt.legend(fontsize=8)
-
-plt.tight_layout()
+color_preds = []
+for name in FEATURE_SETS:
+    if RUN_SAMPLING:
+        colors = {key: np.concatenate([c for _, c in res['samp_draws'][name]]) for key, res in results.items()}
+    else:
+        colors = {key: res[name][f'color_pred_{name}'] for key, res in results.items()}
+    color_preds.append((FEATURE_LABELS[name] + mode_label, colors, {'color': SET_COLORS[name]}))
+fig_color = plot.color_hist_by_bin(mass_bins, {key: res['hydro']['color'] for key, res in results.items()},
+                                   color_preds, COLOR_CUT,
+                                   np.linspace(hydro_full['g-i'].min(), hydro_full['g-i'].max(), 40))
 plt.show()
 
 
@@ -328,51 +313,26 @@ markers = dict(zip(FEATURE_SETS, ['s', 'x', '^', 'D']))
 
 tpcf_figs = {}
 for c, color in enumerate(['red', 'blue']):
-    fig, axes = plt.subplots(2, len(mass_bins), figsize=(19, 9), sharex=True, sharey='row',
-                             gridspec_kw={'height_ratios': [3, 1]})
+    fig, axes = plot.tpcf_ratio_grid(len(mass_bins))
     label = color.capitalize()
-    for i, key in enumerate(mass_bins.keys()):
-        low, high = mass_bins[key]
-        ax, rax = axes[0, i], axes[1, i]
-
-        xi_hydro = tpcf_results['hydro'][i][0][c]
-        err = stats.compute_tpcf_jackknife_errors(tpcf_results['hydro'][i][1][c])
-        ax.plot(rbin_centers, xi_hydro, marker='o', color='k', label=fr'Truth {label}: TNG100 Hydro $\xi(r)$')
-        ax.fill_between(rbin_centers, xi_hydro - err, xi_hydro + err, color='k', alpha=0.15)
-        rax.fill_between(rbin_centers, 1 - err / xi_hydro, 1 + err / xi_hydro, color='k', alpha=0.15)
-
+    for i in range(len(mass_bins)):
+        curves = []
         for name in FEATURE_SETS:
-            xi_pred = tpcf_results[name][i][0][c]
-            err_pred = stats.compute_tpcf_jackknife_errors(tpcf_results[name][i][1][c])
-            ax.errorbar(r_offset[name], xi_pred, yerr=err_pred, color=SET_COLORS[name], capsize=2,
-                        marker=markers[name], linestyle='--',
-                        label=fr'Prediction {label}: {FEATURE_LABELS[name]} $\xi(r)$')
-            rax.errorbar(r_offset[name], xi_pred / xi_hydro, yerr=err_pred / xi_hydro, color=SET_COLORS[name],
-                         capsize=2, marker=markers[name], linestyle='--')
-
+            curves.append({'r': r_offset[name], 'xi': tpcf_results[name][i][0][c],
+                           'err': stats.compute_tpcf_jackknife_errors(tpcf_results[name][i][1][c]),
+                           'color': SET_COLORS[name], 'marker': markers[name], 'linestyle': '--',
+                           'label': fr'Prediction {label}: {FEATURE_LABELS[name]} $\xi(r)$'})
             if RUN_SAMPLING:
                 xi_s, xi_s_lo, xi_s_hi = tpcf_results[f'{name}_samp'][i][c]
-                ax.plot(rbin_centers, xi_s, color=SET_COLORS[name], linestyle='-.',
-                        label=fr'Prediction {label}: {FEATURE_LABELS[name]} Sampling $\xi(r)$ '
-                              fr'(median of {N_TPCF_DRAWS})')
-                ax.fill_between(rbin_centers, xi_s_lo, xi_s_hi, color=SET_COLORS[name], alpha=0.2)
-                rax.plot(rbin_centers, xi_s / xi_hydro, color=SET_COLORS[name], linestyle='-.')
-                rax.fill_between(rbin_centers, xi_s_lo / xi_hydro, xi_s_hi / xi_hydro, color=SET_COLORS[name],
-                                 alpha=0.2)
+                curves.append({'median': xi_s, 'lo': xi_s_lo, 'hi': xi_s_hi, 'color': SET_COLORS[name],
+                               'label': fr'Prediction {label}: {FEATURE_LABELS[name]} Sampling $\xi(r)$ '
+                                        fr'(median of {N_TPCF_DRAWS})'})
 
-        rax.axhline(1, color='k', linewidth=0.8)
-        ax.set_xscale('log')
-        ax.set_yscale('log')
-        ax.set_title(fr'{label}: ${low} \leq \log(M_*/h^{{-1}}M_\odot) < {high}$')
-        rax.set_xlabel(r'$r \, [\mathrm{Mpc}/h]$')
-        if i == 0:
-            ax.set_ylabel(r'$\xi(r)$')
-            rax.set_ylabel(r'$\xi_{\rm pred} / \xi_{\rm hydro}$')
-        if i == len(mass_bins) - 1:
-            ax.legend(fontsize=8)
+        plot.tpcf_ratio_panel(axes[0, i], axes[1, i], rbin_centers, tpcf_results['hydro'][i][0][c],
+                              stats.compute_tpcf_jackknife_errors(tpcf_results['hydro'][i][1][c]),
+                              fr'Truth {label}: TNG100 Hydro $\xi(r)$', 'k', curves, truth_alpha=0.15)
 
-    axes[1, 0].set_ylim(0.5, 1.5)
-    plt.subplots_adjust(wspace=0, hspace=0, left=0.05, right=0.95, bottom=0.1, top=0.9)
+    plot.finish_tpcf_ratio_grid(fig, axes, mass_bins, title_prefix=f'{label}: ')
     plt.show()
     tpcf_figs[color] = fig
 
@@ -383,12 +343,7 @@ figure_names = {
     f'{OUT_NAME}_tpcf_red{suffix}': tpcf_figs['red'],
     f'{OUT_NAME}_tpcf_blue{suffix}': tpcf_figs['blue'],
 }
-png_filenames = []
-for name, fig in figure_names.items():
-    filename = OUT_DIR / f'{name}.png'
-    fig.savefig(filename, format='png', bbox_inches='tight', pad_inches=.25)
-    plt.close(fig)
-    png_filenames.append(str(filename))
+png_filenames = plot.save_named_figures(figure_names, OUT_DIR)
 print(f'\nFigures saved as PNG files: {png_filenames}')
 
 
