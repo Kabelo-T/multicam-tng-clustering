@@ -236,7 +236,6 @@ for i, key in enumerate(mass_bins.keys()):
 plt.tight_layout()
 plt.show()
 
-
 ### Define red/blue galaxies ###
 for key, res in results.items():
     cam_pop = res['cam']
@@ -359,7 +358,6 @@ axes[1, 0].set_ylim(0.5, 1.5)
 plt.subplots_adjust(wspace=0, hspace=0, left=0.05, right=0.95, bottom=0.1, top=0.9)
 plt.show()
 
-### Save figures as PNG files ###
 figure_names = {
     f'mcam_vs_cam_color_hist{suffix}': fig0,
     f'mcam_vs_cam_z12_hist{suffix}': fig_z12,
@@ -375,8 +373,6 @@ for name, fig in figure_names.items():
     png_filenames.append(str(filename))
 print(f'\nFigures saved as PNG files: {png_filenames}')
 
-
-### Save results with pickle ###
 with open(paths.CACHE_DIR / f'tpcf_results_mcam_vs_cam{suffix}.pkl', 'wb') as f:
     pickle.dump({'tpcf': tpcf_results, 'rbins': rbins, 'results': results}, f)
 print("\nSaved TPCF, CAM, and MultiCAM results to pickle.")

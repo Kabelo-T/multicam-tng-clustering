@@ -5,16 +5,15 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=4G
-#SBATCH --time=00:20:00
+#SBATCH --mem=8G
+#SBATCH --time=01:00:00
 #SBATCH --output=mcam_hydro_only-%j.log
 #SBATCH --error=mcam_hydro_only-%j.log
-#SBATCH --mail-type=BEGIN,END
 
 # Usage:
 #   sbatch mcam_hydro_only.sbatch                                                        # no sampling
-#   sbatch --time=02:00:00 --export=ALL,RUN_SAMPLING=True mcam_hydro_only.sbatch       # MultiCamSampling
-#   sbatch --export=ALL,FEATURES=mah mcam_hydro_only.sbatch                             # full-MAH features
+#   sbatch --time=04:00:00 --export=ALL,RUN_SAMPLING=True mcam_hydro_only.sbatch       # MultiCamSampling
+# Outputs go to tests/mcam_mstar_color/
 
 set -euo pipefail
 
@@ -26,8 +25,7 @@ conda activate tng311
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export MPLBACKEND=Agg
 export RUN_SAMPLING=${RUN_SAMPLING:-False}
-export FEATURES=${FEATURES:-z12}
 
-echo "RUN_SAMPLING=$RUN_SAMPLING FEATURES=$FEATURES"
+echo "RUN_SAMPLING=$RUN_SAMPLING"
 
 python3 -u mcam_hydro_only.py

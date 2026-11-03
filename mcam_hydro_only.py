@@ -5,63 +5,63 @@ import matplotlib.pyplot as plt
 import pickle
 from scipy.stats import spearmanr
 import stats
-import sham
 import paths
-from constants import TNG_H, LBOX, HYDRO_STELLAR_MASS_MIN, MASS_BIN_EDGES
+from constants import LBOX, HYDRO_STELLAR_MASS_MIN, MASS_BIN_EDGES
 from halotools.mock_observables import return_xyz_formatted_array
 from halotools.mock_observables.two_point_clustering import tpcf_jackknife, tpcf
 from multicam.multicam import MultiCAM, MultiCamSampling
 
-# Hydro-only comparison of two ways of predicting (M*, g-i) from halo properties.
-# No DMO data is used: every halo property comes from the hydro catalog's own trees.
+# Hydro-only test of how the halo features given to MultiCAM change its joint prediction of
+# (g-i, log M*). No DMO data is used: every halo property comes from the hydro catalog's own trees.
 #
-# The halo features are set by FEATURES (from the environment, default 'z12'):
-#   'z12': color feature z12;         M*/color features (z12, log mpeak)
-#   'mah': color feature full MAH;    M*/color features (full MAH, log mpeak)
-# where the full MAH is mpeak_mah0..99.
+# Feature sets (FEATURE_SETS), where the full MAH is mpeak_mah0..99:
+#   'z12':       z12
+#   'z12_mpeak': z12, log mpeak
+#   'mah_mpeak': full MAH, log mpeak
+#   'z12_mah':   z12, full MAH
+# mpeak_mah99 is mpeak itself (same ranks), so it is left out of 'mah_mpeak': the duplicate
+# feature makes the MultiCamSampling feature covariance singular. 'z12_mah' keeps it, so it
+# also carries mpeak.
 #
-# SHAM + MultiCAM: stellar mass is assigned by SHAM of hydro mpeak (peak total SubhaloMass)
-# onto the hydro stellar mass distribution. In each SHAM stellar-mass bin, color comes from
-# MultiCAM (color features -> g-i) fit on the true stellar-mass bin and applied to the
-# SHAM bin (with FEATURES='z12' this is the MultiCAM in mcam_vs_cam.py).
+# For each set, one MultiCAM with 2 targets (g-i, log M*) is fit and applied on the full hydro
+# sample. Galaxies are binned on that set's predicted stellar mass and use its predicted color,
+# so each set puts different galaxies in each bin; the truth uses the true stellar mass and color.
 #
-# MultiCAM (M*, color): one MultiCAM with the M*/color features and 2 targets
-# (g-i, log M*), fit and applied on the full hydro sample. Galaxies are binned on the
-# predicted stellar mass and use the predicted color. Unlike SHAM, the stellar mass can
-# depend on assembly history at fixed mpeak (assembly bias).
-#
-# The two methods put different galaxies in each bin, so the halo-by-halo color comparison
-# uses the galaxies that fall in the bin under both predicted stellar masses.
+# Without sampling, MultiCAM maps its predictions back onto the training targets, so the
+# full-sample M* and color distributions match the truth by construction; the sets differ in
+# the M* residuals, the per-bin color distributions and the clustering. With RUN_SAMPLING,
+# MultiCamSampling adds the conditional scatter: histograms are pooled over N_SAMPLES draws and
+# xi(r) uses the first N_TPCF_DRAWS draws.
 
 COLOR_CUT = 0.85
 N_THREADS = 16
 N_SAMPLES = 100
+N_TPCF_DRAWS = 25
 SAMPLE_PCTILES = (16, 84)
-# MultiCamSampling (scatter) mode; slow because of the N_SAMPLES tpcf draws.
+# xi(r) is skipped (NaN) for samples with fewer than MIN_TPCF_POINTS galaxies; the jackknife
+# also needs a galaxy in every one of its Nsub^3 subvolumes
+MIN_TPCF_POINTS = 10
+JACKKNIFE_NSUB = 3
+# MultiCamSampling (scatter) mode; slow because of the N_TPCF_DRAWS tpcf draws per set.
 # Set from the environment (e.g. mcam_hydro_only.sbatch) with RUN_SAMPLING=True
 RUN_SAMPLING = os.environ.get('RUN_SAMPLING', 'False') == 'True'
-# Halo features; set from the environment with FEATURES=mah (see header)
-FEATURES = os.environ.get('FEATURES', 'z12')
-if FEATURES == 'mah':
-    FIGURES_SUBDIR = paths.FIGURES_DIR / 'mcam_full_mah'
-else:
-    FIGURES_SUBDIR = paths.FIGURES_DIR / ('sampling' if RUN_SAMPLING else 'no_sampling')
 MAH_COLS = [f'mpeak_mah{ii}' for ii in range(100)]
-COLOR_FEATURES = {'z12': ['z12'], 'mah': MAH_COLS}[FEATURES]
-MCAM_FEATURES = COLOR_FEATURES + ['logMpeak']
-# output file prefix, so each feature set has its own figures, diagnostics and pickle
-OUT_NAME = 'mcam_hydro_only' + ('' if FEATURES == 'z12' else f'_{FEATURES}')
-METHODS = ['sham', 'mcam']
-FEATURE_LABELS = {'z12': (r'$z_{1/2}$', r'$z_{1/2}$ + $M_{\rm peak}$'),
-                  'mah': ('MAH', r'MAH + $M_{\rm peak}$')}[FEATURES]
-METHOD_LABELS = {'sham': f'SHAM + MultiCAM ({FEATURE_LABELS[0]})',
-                 'mcam': fr'MultiCAM ($M_*$, color; {FEATURE_LABELS[1]})'}
+FEATURE_SETS = {'z12': ['z12'],
+                'z12_mpeak': ['z12', 'logMpeak'],
+                'mah_mpeak': MAH_COLS[:-1] + ['logMpeak'],
+                'z12_mah': ['z12'] + MAH_COLS}
+FEATURE_LABELS = {'z12': r'MultiCAM ($z_{1/2}$)',
+                  'z12_mpeak': r'MultiCAM ($z_{1/2}$ + $M_{\rm peak}$)',
+                  'mah_mpeak': r'MultiCAM (MAH + $M_{\rm peak}$)',
+                  'z12_mah': r'MultiCAM ($z_{1/2}$ + MAH)'}
+SET_COLORS = dict(zip(FEATURE_SETS, ['C0', 'C1', 'C2', 'C3']))
+OUT_DIR = paths.REPO_ROOT / 'tests' / 'mcam_mstar_color'
+OUT_NAME = 'mcam_mstar_color'
 
 ## Load data ###
 hydro_full = pd.read_csv(paths.HYDRO_COLOR_TREE_CACHE, usecols=['SubhaloMass', 'StellarMass', 'x', 'y', 'z',
                                                                 'logStellarMass', 'logSubhaloMass', 'g-i',
-                                                                'a12', 'mpeak', 'is_sub',
-                                                                *(MAH_COLS if FEATURES == 'mah' else [])])
+                                                                'a12', 'mpeak', 'is_sub', *MAH_COLS])
 print("\nHydro Table")
 print(len(hydro_full))
 print("\nCache files read in!")
@@ -74,35 +74,42 @@ print(len(hydro_full))
 # Add z12 and log mpeak columns
 hydro_full['z12'] = (1 / hydro_full['a12']) - 1
 hydro_full['logMpeak'] = np.log10(hydro_full['mpeak'])
+log_mstar_true = hydro_full['logStellarMass'].to_numpy()
 
 
-### Stellar mass predictions for the full sample ###
-# SHAM: mpeak rank-matched onto the observed stellar mass distribution
-hydro_full['logStellarMass_sham'] = sham.sham(hydro_full['logMpeak'].to_numpy(),
-                                              hydro_full['logStellarMass'].to_numpy())
+### (g-i, log M*) predictions for the full sample, one MultiCAM per feature set ###
+targets = hydro_full[['g-i', 'logStellarMass']].to_numpy()
+samp_draws_full = {}  # per set: (N_SAMPLES, N_galaxies, 2) array of sampled (g-i, log M*)
 
-# MultiCAM: M*/color features -> (g-i, log M*), fit and applied on the full sample
-features_mcam = hydro_full[MCAM_FEATURES].to_numpy()
-targets_mcam = hydro_full[['g-i', 'logStellarMass']].to_numpy()
-model_mcam = MultiCAM(len(MCAM_FEATURES), 2)
-model_mcam.fit(features_mcam, targets_mcam)
-pred_mcam = model_mcam.predict(features_mcam)
-hydro_full['color_pred_mcam'] = pred_mcam[:, 0]
-hydro_full['logStellarMass_mcam'] = pred_mcam[:, 1]
+for name, cols in FEATURE_SETS.items():
+    features = hydro_full[cols].to_numpy()
+    model = MultiCAM(len(cols), 2)
+    model.fit(features, targets)
+    pred = model.predict(features)
+    hydro_full[f'color_pred_{name}'] = pred[:, 0]
+    hydro_full[f'logStellarMass_{name}'] = pred[:, 1]
 
-if RUN_SAMPLING:
-    model_mcam_samp = MultiCamSampling(len(MCAM_FEATURES), 2)
-    model_mcam_samp.fit(features_mcam, targets_mcam)
-    mcam_samp_draws = np.array([model_mcam_samp.sample(features_mcam) for _ in range(N_SAMPLES)])
+    if RUN_SAMPLING:
+        model_samp = MultiCamSampling(len(cols), 2)
+        model_samp.fit(features, targets)
+        samp_draws_full[name] = np.array([model_samp.sample(features) for _ in range(N_SAMPLES)])
 
 mstar_diag = {}
-for name in METHODS:
+for name in FEATURE_SETS:
     resid = hydro_full[f'logStellarMass_{name}'] - hydro_full['logStellarMass']
     mstar_diag[name] = {'spearman_mstar': spearmanr(hydro_full[f'logStellarMass_{name}'],
                                                     hydro_full['logStellarMass']).statistic,
                         'mstar_resid_std_dex': np.std(resid)}
-    print(f"\n{METHOD_LABELS[name]} log M*: Spearman with truth = {mstar_diag[name]['spearman_mstar']:.3f}, "
+    if RUN_SAMPLING:
+        draws_mstar = samp_draws_full[name][:, :, 1]
+        mstar_diag[name]['spearman_mstar_samp'] = np.mean([spearmanr(d, log_mstar_true).statistic
+                                                           for d in draws_mstar])
+        mstar_diag[name]['mstar_resid_std_dex_samp'] = np.mean(np.std(draws_mstar - log_mstar_true, axis=1))
+    print(f"\n{FEATURE_LABELS[name]} log M*: Spearman with truth = {mstar_diag[name]['spearman_mstar']:.3f}, "
           f"scatter about truth = {mstar_diag[name]['mstar_resid_std_dex']:.3f} dex")
+    if RUN_SAMPLING:
+        print(f"  sampling (mean of {N_SAMPLES} draws): Spearman = {mstar_diag[name]['spearman_mstar_samp']:.3f}, "
+              f"scatter = {mstar_diag[name]['mstar_resid_std_dex_samp']:.3f} dex")
 
 
 ### Run predictions for bins ###
@@ -113,58 +120,35 @@ diagnostics = []
 
 for key, (low, high) in mass_bins.items():
     mask_gal = (hydro_full['logStellarMass'] >= low) & (hydro_full['logStellarMass'] < high)
-    mask_sham = (hydro_full['logStellarMass_sham'] >= low) & (hydro_full['logStellarMass_sham'] < high)
-    mask_mcam = (hydro_full['logStellarMass_mcam'] >= low) & (hydro_full['logStellarMass_mcam'] < high)
-
-    hydro_bin = hydro_full[mask_gal].copy()  # truth and SHAM + MultiCAM training set (true stellar mass)
-    sham_bin = hydro_full[mask_sham].copy()  # SHAM + MultiCAM population (SHAM stellar mass)
-    mcam_bin = hydro_full[mask_mcam].copy()  # MultiCAM (M*, color) population (predicted stellar mass)
+    hydro_bin = hydro_full[mask_gal].copy()  # truth (true stellar mass and color)
     hydro_bin['color'] = hydro_bin['g-i']
 
-    # SHAM + MultiCAM: fit on true-bin (color features, g-i) pairs, applied to the SHAM bin
-    x_train = hydro_bin[COLOR_FEATURES].to_numpy()
-    y_train = hydro_bin[['g-i']].to_numpy()
-    x_sham = sham_bin[COLOR_FEATURES].to_numpy()
-
-    model = MultiCAM(len(COLOR_FEATURES), 1)
-    model.fit(x_train, y_train)
-    sham_bin['color_pred_sham'] = model.predict(x_sham)[:, 0]
+    # each set's population: galaxies whose predicted stellar mass falls in the bin
+    pops = {'hydro': (hydro_bin, 'color')}
+    for name in FEATURE_SETS:
+        mask_pred = (hydro_full[f'logStellarMass_{name}'] >= low) & (hydro_full[f'logStellarMass_{name}'] < high)
+        pops[name] = (hydro_full[mask_pred].copy(), f'color_pred_{name}')
 
     samp_draws = None
     if RUN_SAMPLING:
-        model_samp = MultiCamSampling(len(COLOR_FEATURES), 1)
-        model_samp.fit(x_train, y_train)
         # each draw: (population mask over hydro_full, predicted colors of that population)
-        samp_draws = {'sham': [(mask_sham.to_numpy(), model_samp.sample(x_sham)[:, 0]) for _ in range(N_SAMPLES)],
-                      'mcam': []}
-        for draw in mcam_samp_draws:
-            in_bin = (draw[:, 1] >= low) & (draw[:, 1] < high)
-            samp_draws['mcam'].append((in_bin, draw[in_bin, 0]))
+        samp_draws = {}
+        for name in FEATURE_SETS:
+            samp_draws[name] = []
+            for draw in samp_draws_full[name]:
+                in_bin = (draw[:, 1] >= low) & (draw[:, 1] < high)
+                samp_draws[name].append((in_bin, draw[in_bin, 0]))
 
-    pops = {'hydro': (hydro_bin, 'color'),
-            'sham': (sham_bin, 'color_pred_sham'),
-            'mcam': (mcam_bin, 'color_pred_mcam')}
-
-    # Halo-by-halo color comparison on the overlap of the SHAM and MultiCAM bins
-    common = sham_bin.index.intersection(mcam_bin.index)
-    sham_common = sham_bin.loc[common, 'color_pred_sham'].to_numpy()
-    mcam_common = mcam_bin.loc[common, 'color_pred_mcam'].to_numpy()
-    rho_colors = spearmanr(sham_common, mcam_common).statistic
-    diff = mcam_common - sham_common
-
-    print(f"\n{key} [{low}, {high}): N_hydro = {len(hydro_bin)}, N_sham = {len(sham_bin)}, N_mcam = {len(mcam_bin)}")
+    print(f"\n{key} [{low}, {high}): " + ", ".join(f"N_{name} = {len(pop)}" for name, (pop, _) in pops.items()))
     diag = {'bin': key, 'logmstar_min': low, 'logmstar_max': high,
-            'n_hydro': len(hydro_bin), 'n_sham': len(sham_bin), 'n_mcam': len(mcam_bin),
-            'n_overlap_sham_mcam': len(common),
-            'spearman_train_z12_gi': spearmanr(hydro_bin['z12'], hydro_bin['g-i']).statistic,
-            'spearman_sham_mcam_colors': rho_colors,
-            'median_diff_mcam_sham_colors': np.median(diff)}
-    for name in METHODS:
-        # fraction of true-bin galaxies that the method also places in the bin
+            'spearman_train_z12_gi': spearmanr(hydro_bin['z12'], hydro_bin['g-i']).statistic}
+    for name, (pop, _) in pops.items():
+        diag[f'n_{name}'] = len(pop)
+    for name in FEATURE_SETS:
+        # fraction of true-bin galaxies that the set also places in the bin
         diag[f'overlap_frac_{name}'] = len(pops[name][0].index.intersection(hydro_bin.index)) / len(hydro_bin)
-    print(f"  true-bin overlap: SHAM {diag['overlap_frac_sham']:.3f}, MultiCAM {diag['overlap_frac_mcam']:.3f}")
-    print(f"  Spearman(SHAM + MultiCAM, MultiCAM) colors, overlap of the two bins (N = {len(common)}): {rho_colors:.4f}")
-    print(f"  median (MultiCAM - SHAM + MultiCAM) color, overlap:  {np.median(diff):.4f}")
+    print("  true-bin overlap:                 " + ", ".join(
+        f"{name} {diag[f'overlap_frac_{name}']:.3f}" for name in FEATURE_SETS))
 
     # Red and satellite fractions of each red/blue sample
     for name, (pop, col) in pops.items():
@@ -177,36 +161,76 @@ for key, (low, high) in mass_bins.items():
     print("  satellite fraction (red / blue):  " + ", ".join(
         f"{name} {diag[f'sat_frac_red_{name}']:.3f} / {diag[f'sat_frac_blue_{name}']:.3f}" for name in pops))
     if RUN_SAMPLING:
-        for name in METHODS:
+        for name in FEATURE_SETS:
+            diag[f'n_{name}_samp'] = np.mean([in_bin.sum() for in_bin, _ in samp_draws[name]])
             diag[f'red_frac_{name}_samp'] = np.mean(np.concatenate([c for _, c in samp_draws[name]]) > COLOR_CUT)
+        print("  red fraction (sampling, pooled):  " + ", ".join(
+            f"{name} {diag[f'red_frac_{name}_samp']:.3f}" for name in FEATURE_SETS))
     diagnostics.append(diag)
 
-    results[key] = {'hydro': hydro_bin, 'sham': sham_bin, 'mcam': mcam_bin, 'common': common,
-                    'samp_draws': samp_draws}
+    results[key] = {name: pop for name, (pop, _) in pops.items()}
+    results[key]['samp_draws'] = samp_draws
 
 print("\nPredictions complete for all bins.")
 
 suffix = '_with_sampling' if RUN_SAMPLING else ''
-paths.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+OUT_DIR.mkdir(parents=True, exist_ok=True)
 diagnostics_df = pd.DataFrame(diagnostics)
-for name in METHODS:
+for name in FEATURE_SETS:
     for stat, value in mstar_diag[name].items():
         diagnostics_df[f'{stat}_{name}'] = value
-diagnostics_file = paths.CACHE_DIR / f'{OUT_NAME}_diagnostics{suffix}.csv'
+diagnostics_file = OUT_DIR / f'{OUT_NAME}_diagnostics{suffix}.csv'
 diagnostics_df.to_csv(diagnostics_file, index=False)
 print(f"\nSaved diagnostics to {diagnostics_file}")
 
 
-### Histogram of color vs. predicted color ###
-fig0 = plt.figure(figsize=(18, 4))
+### Histograms of stellar mass: full sample and residual about truth ###
+# With sampling, the predictions are pooled over all N_SAMPLES draws
+mode_label = f' (sampling, {N_SAMPLES} draws)' if RUN_SAMPLING else ''
+fig_mstar, axes = plt.subplots(1, 2, figsize=(13, 5))
+mstar_hist_bins = np.linspace(log_mstar_true.min(), log_mstar_true.max(), 50)
+axes[0].hist(log_mstar_true, bins=mstar_hist_bins, density=True, color='gray', alpha=0.4,
+             label=r'True $M_*$ (Hydro)')
+for name in FEATURE_SETS:
+    if RUN_SAMPLING:
+        mstar_pred = samp_draws_full[name][:, :, 1]
+    else:
+        mstar_pred = hydro_full[f'logStellarMass_{name}'].to_numpy()
+    axes[0].hist(mstar_pred.ravel(), bins=mstar_hist_bins, density=True, histtype='step', linewidth=2,
+                 color=SET_COLORS[name], label=FEATURE_LABELS[name] + mode_label)
+    axes[1].hist((mstar_pred - log_mstar_true).ravel(), bins=60, density=True, histtype='step', linewidth=2,
+                 color=SET_COLORS[name], label=FEATURE_LABELS[name] + mode_label)
+for low, high in MASS_BIN_EDGES:
+    for edge in (low, high):
+        axes[0].axvline(edge, color='k', linestyle=':', linewidth=0.8)
+axes[0].set_yscale('log')
+axes[0].set_xlabel(r'$\log(M_*/h^{-1}M_\odot)$')
+axes[0].set_ylabel('Normalized frequency')
+axes[0].legend(fontsize=8)
+axes[1].axvline(0, color='k', linewidth=0.8)
+axes[1].set_xlabel(r'$\log M_{*,\rm pred} - \log M_{*,\rm true}$ [dex]')
+axes[1].set_ylabel('Normalized frequency')
+plt.tight_layout()
+plt.show()
+
+
+### Histogram of color vs. predicted color, per stellar-mass bin ###
+fig_color = plt.figure(figsize=(18, 4))
 
 for i, key in enumerate(mass_bins.keys()):
     plt.subplot(1, len(mass_bins), i+1)
 
     res = results[key]
-    plt.hist(res['hydro']['color'], bins=40, density=True, alpha=0.4, label='True color (Hydro)')
-    plt.hist(res['sham']['color_pred_sham'], bins=40, density=True, histtype='step', linewidth=2, label=METHOD_LABELS['sham'])
-    plt.hist(res['mcam']['color_pred_mcam'], bins=40, density=True, histtype='step', linewidth=2, linestyle='--', label=METHOD_LABELS['mcam'])
+    color_hist_bins = np.linspace(hydro_full['g-i'].min(), hydro_full['g-i'].max(), 40)
+    plt.hist(res['hydro']['color'], bins=color_hist_bins, density=True, color='gray', alpha=0.4,
+             label='True color (Hydro)')
+    for name in FEATURE_SETS:
+        if RUN_SAMPLING:
+            color_pred = np.concatenate([c for _, c in res['samp_draws'][name]])
+        else:
+            color_pred = res[name][f'color_pred_{name}']
+        plt.hist(color_pred, bins=color_hist_bins, density=True, histtype='step', linewidth=2,
+                 color=SET_COLORS[name], label=FEATURE_LABELS[name] + mode_label)
     plt.axvline(COLOR_CUT, color='k', linestyle='--')
     low, high = mass_bins[key]
     plt.title(fr'${low} \leq \log(M_*/h^{{-1}}M_\odot) < {high}$')
@@ -214,26 +238,7 @@ for i, key in enumerate(mass_bins.keys()):
     plt.ylabel('Normalized frequency')
 
     if i == 0:
-        plt.legend()
-
-plt.tight_layout()
-plt.show()
-
-
-### SHAM + MultiCAM vs MultiCAM color, halo by halo on the overlap of their bins ###
-fig1, axes = plt.subplots(1, len(mass_bins), figsize=(18, 5))
-for i, key in enumerate(mass_bins.keys()):
-    res = results[key]
-    ax = axes[i]
-    common = res['common']
-    ax.scatter(res['sham'].loc[common, 'color_pred_sham'], res['mcam'].loc[common, 'color_pred_mcam'], s=1, color='k')
-    lims = [res['hydro']['color'].min(), res['hydro']['color'].max()]
-    ax.plot(lims, lims, 'r--', linewidth=1)
-    low, high = mass_bins[key]
-    ax.set_title(fr'${low} \leq \log(M_*/h^{{-1}}M_\odot) < {high}$')
-    ax.set_xlabel(r'SHAM + MultiCAM $g - i$ (overlap of predicted $M_*$ bins)')
-    if i == 0:
-        ax.set_ylabel(r'MultiCAM ($M_*$, color) $g - i$')
+        plt.legend(fontsize=8)
 
 plt.tight_layout()
 plt.show()
@@ -243,7 +248,7 @@ plt.show()
 for key, res in results.items():
     res['red_hydro'] = res['hydro'][res['hydro']['color'] > COLOR_CUT]
     res['blue_hydro'] = res['hydro'][res['hydro']['color'] <= COLOR_CUT]
-    for name in METHODS:
+    for name in FEATURE_SETS:
         pop = res[name]
         res[f'red_{name}'] = pop[pop[f'color_pred_{name}'] > COLOR_CUT]
         res[f'blue_{name}'] = pop[pop[f'color_pred_{name}'] <= COLOR_CUT]
@@ -260,26 +265,36 @@ print("\nGenerated 50000 randoms.")
 
 
 def xyz(table):
-    return return_xyz_formatted_array(table['x'] * TNG_H, table['y'] * TNG_H, table['z'] * TNG_H)
+    # cached positions are already comoving Mpc/h (SubhaloPos ckpc/h / 1000), filling [0, LBOX)
+    return return_xyz_formatted_array(table['x'], table['y'], table['z'])
 
 
 def jackknife(table):
-    return tpcf_jackknife(xyz(table), randoms, rbins, Nsub=3, period=Lbox, num_threads=N_THREADS)
+    # e.g. no red galaxies in a bin; NaN xi and cov are skipped when plotting
+    subvol = np.floor(xyz(table) / (Lbox / JACKKNIFE_NSUB)).astype(int) % JACKKNIFE_NSUB
+    n_occupied = len(np.unique(subvol, axis=0))
+    if len(table) < MIN_TPCF_POINTS or n_occupied < JACKKNIFE_NSUB ** 3:
+        print(f"  skipping jackknife xi(r): N = {len(table)}, occupied subvolumes = {n_occupied}")
+        return np.full(len(rbins) - 1, np.nan), np.full((len(rbins) - 1, len(rbins) - 1), np.nan)
+    return tpcf_jackknife(xyz(table), randoms, rbins, Nsub=JACKKNIFE_NSUB, period=Lbox, num_threads=N_THREADS)
+
+
+def plain_tpcf(table):
+    if len(table) < MIN_TPCF_POINTS:
+        return np.full(len(rbins) - 1, np.nan)
+    return tpcf(xyz(table), rbins, randoms=randoms, period=Lbox, num_threads=N_THREADS)
 
 
 # Store all xi and cov results here; sampling stores (median, lo, hi) over draws
-tpcf_results = {
-    'hydro': [],
-    'sham': [],
-    'mcam': [],
-    'sham_samp': [],
-    'mcam_samp': [],
-}
+tpcf_results = {'hydro': []}
+for name in FEATURE_SETS:
+    tpcf_results[name] = []
+    tpcf_results[f'{name}_samp'] = []
 
 for key, res in results.items():
     print(f"\nComputing TPCF for {key}.")
 
-    for name in ['hydro', *METHODS]:
+    for name in ['hydro', *FEATURE_SETS]:
         xi_red, cov_red = jackknife(res[f'red_{name}'])
         xi_blue, cov_blue = jackknife(res[f'blue_{name}'])
         tpcf_results[name].append(((xi_red, xi_blue), (cov_red, cov_blue)))
@@ -288,87 +303,89 @@ for key, res in results.items():
         continue
 
     # MultiCAM Sampling: tpcf of each draw, median and percentile band across draws
-    for name in METHODS:
+    for name in FEATURE_SETS:
         xi_red_draws, xi_blue_draws = [], []
-        for in_bin, color_draw in res['samp_draws'][name]:
+        for in_bin, color_draw in res['samp_draws'][name][:N_TPCF_DRAWS]:
             pop = hydro_full[in_bin]
             red = color_draw > COLOR_CUT
-            xi_red_draws.append(tpcf(xyz(pop[red]), rbins, randoms=randoms, period=Lbox, num_threads=N_THREADS))
-            xi_blue_draws.append(tpcf(xyz(pop[~red]), rbins, randoms=randoms, period=Lbox, num_threads=N_THREADS))
+            xi_red_draws.append(plain_tpcf(pop[red]))
+            xi_blue_draws.append(plain_tpcf(pop[~red]))
 
         summary = []
         for draws in [np.array(xi_red_draws), np.array(xi_blue_draws)]:
-            summary.append((np.median(draws, axis=0),
-                            np.percentile(draws, SAMPLE_PCTILES[0], axis=0),
-                            np.percentile(draws, SAMPLE_PCTILES[1], axis=0)))
+            summary.append((np.nanmedian(draws, axis=0),
+                            np.nanpercentile(draws, SAMPLE_PCTILES[0], axis=0),
+                            np.nanpercentile(draws, SAMPLE_PCTILES[1], axis=0)))
         tpcf_results[f'{name}_samp'].append(tuple(summary))
 
 print("\nTPCF computed for all bins.")
 
 
-### Plot results: xi(r) and ratio to hydro truth ###
-# The two predictions are offset slightly in r so their jackknife error bars don't overlap
-r_offset = {'sham': rbin_centers * 0.97, 'mcam': rbin_centers * 1.03}
-styles = {'sham': {'marker': 's', 'linestyle': '--'}, 'mcam': {'marker': 'x', 'linestyle': ':'}}
-samp_colors = {('sham', 'red'): 'orange', ('sham', 'blue'): 'green',
-               ('mcam', 'red'): 'magenta', ('mcam', 'blue'): 'cyan'}
+### Plot results: xi(r) and ratio to hydro truth, one figure each for red and blue ###
+# The predictions are offset slightly in r so their jackknife error bars don't overlap
+r_offset = dict(zip(FEATURE_SETS, [rbin_centers * f for f in [0.94, 0.98, 1.02, 1.06]]))
+markers = dict(zip(FEATURE_SETS, ['s', 'x', '^', 'D']))
 
-fig2, axes = plt.subplots(2, len(mass_bins), figsize=(19, 9), sharex=True, sharey='row',
-                          gridspec_kw={'height_ratios': [3, 1]})
-for i, key in enumerate(mass_bins.keys()):
-    low, high = mass_bins[key]
-    ax, rax = axes[0, i], axes[1, i]
+tpcf_figs = {}
+for c, color in enumerate(['red', 'blue']):
+    fig, axes = plt.subplots(2, len(mass_bins), figsize=(19, 9), sharex=True, sharey='row',
+                             gridspec_kw={'height_ratios': [3, 1]})
+    label = color.capitalize()
+    for i, key in enumerate(mass_bins.keys()):
+        low, high = mass_bins[key]
+        ax, rax = axes[0, i], axes[1, i]
 
-    for c, color in enumerate(['red', 'blue']):
         xi_hydro = tpcf_results['hydro'][i][0][c]
         err = stats.compute_tpcf_jackknife_errors(tpcf_results['hydro'][i][1][c])
-        label = color.capitalize()
+        ax.plot(rbin_centers, xi_hydro, marker='o', color='k', label=fr'Truth {label}: TNG100 Hydro $\xi(r)$')
+        ax.fill_between(rbin_centers, xi_hydro - err, xi_hydro + err, color='k', alpha=0.15)
+        rax.fill_between(rbin_centers, 1 - err / xi_hydro, 1 + err / xi_hydro, color='k', alpha=0.15)
 
-        ax.plot(rbin_centers, xi_hydro, marker='o', color=color, label=fr'Truth {label}: TNG100 Hydro $\xi(r)$')
-        ax.fill_between(rbin_centers, xi_hydro - err, xi_hydro + err, color=color, alpha=0.2)
-        rax.fill_between(rbin_centers, 1 - err / xi_hydro, 1 + err / xi_hydro, color=color, alpha=0.2)
-
-        for name in METHODS:
+        for name in FEATURE_SETS:
             xi_pred = tpcf_results[name][i][0][c]
             err_pred = stats.compute_tpcf_jackknife_errors(tpcf_results[name][i][1][c])
-            line_color = color if name == 'sham' else ('k' if color == 'red' else 'gray')
-            ax.errorbar(r_offset[name], xi_pred, yerr=err_pred, color=line_color, capsize=2, **styles[name],
-                        label=fr'Prediction {label}: {METHOD_LABELS[name]} $\xi(r)$')
-            rax.errorbar(r_offset[name], xi_pred / xi_hydro, yerr=err_pred / xi_hydro, color=line_color, capsize=2,
-                         **styles[name])
+            ax.errorbar(r_offset[name], xi_pred, yerr=err_pred, color=SET_COLORS[name], capsize=2,
+                        marker=markers[name], linestyle='--',
+                        label=fr'Prediction {label}: {FEATURE_LABELS[name]} $\xi(r)$')
+            rax.errorbar(r_offset[name], xi_pred / xi_hydro, yerr=err_pred / xi_hydro, color=SET_COLORS[name],
+                         capsize=2, marker=markers[name], linestyle='--')
 
             if RUN_SAMPLING:
                 xi_s, xi_s_lo, xi_s_hi = tpcf_results[f'{name}_samp'][i][c]
-                ax.plot(rbin_centers, xi_s, color=samp_colors[(name, color)], linestyle='-.',
-                        label=fr'Prediction {label}: {METHOD_LABELS[name]} Sampling $\xi(r)$ (median of {N_SAMPLES})')
-                ax.fill_between(rbin_centers, xi_s_lo, xi_s_hi, color=samp_colors[(name, color)], alpha=0.2)
-                rax.plot(rbin_centers, xi_s / xi_hydro, color=samp_colors[(name, color)], linestyle='-.')
+                ax.plot(rbin_centers, xi_s, color=SET_COLORS[name], linestyle='-.',
+                        label=fr'Prediction {label}: {FEATURE_LABELS[name]} Sampling $\xi(r)$ '
+                              fr'(median of {N_TPCF_DRAWS})')
+                ax.fill_between(rbin_centers, xi_s_lo, xi_s_hi, color=SET_COLORS[name], alpha=0.2)
+                rax.plot(rbin_centers, xi_s / xi_hydro, color=SET_COLORS[name], linestyle='-.')
+                rax.fill_between(rbin_centers, xi_s_lo / xi_hydro, xi_s_hi / xi_hydro, color=SET_COLORS[name],
+                                 alpha=0.2)
 
-    rax.axhline(1, color='k', linewidth=0.8)
-    ax.set_xscale('log')
-    ax.set_yscale('log')
-    ax.set_title(fr'${low} \leq \log(M_*/h^{{-1}}M_\odot) < {high}$')
-    rax.set_xlabel(r'$r \, [\mathrm{Mpc}/h]$')
-    if i == 0:
-        ax.set_ylabel(r'$\xi(r)$')
-        rax.set_ylabel(r'$\xi_{\rm pred} / \xi_{\rm hydro}$')
-    if i == len(mass_bins) - 1:
-        ax.legend(fontsize=8)
+        rax.axhline(1, color='k', linewidth=0.8)
+        ax.set_xscale('log')
+        ax.set_yscale('log')
+        ax.set_title(fr'{label}: ${low} \leq \log(M_*/h^{{-1}}M_\odot) < {high}$')
+        rax.set_xlabel(r'$r \, [\mathrm{Mpc}/h]$')
+        if i == 0:
+            ax.set_ylabel(r'$\xi(r)$')
+            rax.set_ylabel(r'$\xi_{\rm pred} / \xi_{\rm hydro}$')
+        if i == len(mass_bins) - 1:
+            ax.legend(fontsize=8)
 
-axes[1, 0].set_ylim(0.5, 1.5)
-plt.subplots_adjust(wspace=0, hspace=0, left=0.05, right=0.95, bottom=0.1, top=0.9)
-plt.show()
+    axes[1, 0].set_ylim(0.5, 1.5)
+    plt.subplots_adjust(wspace=0, hspace=0, left=0.05, right=0.95, bottom=0.1, top=0.9)
+    plt.show()
+    tpcf_figs[color] = fig
 
 ### Save figures as PNG files ###
 figure_names = {
-    f'{OUT_NAME}_color_hist': fig0,
-    f'{OUT_NAME}_color_scatter': fig1,
-    f'{OUT_NAME}_red_blue_tpcf': fig2,
+    f'{OUT_NAME}_mstar_hist{suffix}': fig_mstar,
+    f'{OUT_NAME}_color_hist{suffix}': fig_color,
+    f'{OUT_NAME}_tpcf_red{suffix}': tpcf_figs['red'],
+    f'{OUT_NAME}_tpcf_blue{suffix}': tpcf_figs['blue'],
 }
-FIGURES_SUBDIR.mkdir(parents=True, exist_ok=True)
 png_filenames = []
 for name, fig in figure_names.items():
-    filename = FIGURES_SUBDIR / f'{name}.png'
+    filename = OUT_DIR / f'{name}.png'
     fig.savefig(filename, format='png', bbox_inches='tight', pad_inches=.25)
     plt.close(fig)
     png_filenames.append(str(filename))
@@ -376,6 +393,6 @@ print(f'\nFigures saved as PNG files: {png_filenames}')
 
 
 ### Save results with pickle ###
-with open(paths.CACHE_DIR / f'tpcf_results_{OUT_NAME}{suffix}.pkl', 'wb') as f:
+with open(OUT_DIR / f'tpcf_results_{OUT_NAME}{suffix}.pkl', 'wb') as f:
     pickle.dump({'tpcf': tpcf_results, 'rbins': rbins, 'results': results}, f)
 print("\nSaved TPCF and prediction results to pickle.")
