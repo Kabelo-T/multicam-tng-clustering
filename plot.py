@@ -142,25 +142,32 @@ def finish_tpcf_ratio_grid(fig, axes, mass_bins, title_prefix=''):
     fig.subplots_adjust(wspace=0, hspace=0, left=0.05, right=0.95, bottom=0.1, top=0.9)
 
 
-def color_hist_by_bin(mass_bins, truth, preds, color_cut, bins):
+def color_hist_by_bin(mass_bins, truth, preds, color_cut, bins, axes=None, title_prefix=''):
     """Creates one g-i histogram panel per mass bin, true color against predicted colors
     Args:
         mass_bins: dict of bin key -> (low, high) log stellar mass edges
         truth: dict of bin key -> true colors in that bin
-        preds: list of (label, dict of bin key -> predicted colors, dict of extra hist kwargs) tuples
+        preds: list of (label, dict of bin key -> predicted colors, dict of extra hist kwargs) tuples;
+            the kwargs can override the default histtype='step', linewidth=2
         color_cut: red/blue g-i cut, drawn as a vertical line
         bins: histogram bin edges shared by all panels
+        axes: optional row of len(mass_bins) axes to draw into, i.e. one row of a larger grid;
+            by default a new 1-row figure is created
+        title_prefix: string placed before each bin title, i.e. 'SHAM: '
     Return:
         fig: figure object containing the plots
     """
-    fig, axes = plt.subplots(1, len(mass_bins), figsize=(18, 4))
+    if axes is None:
+        fig, axes = plt.subplots(1, len(mass_bins), figsize=(18, 4))
+    else:
+        fig = axes[0].figure
     for i, (key, (low, high)) in enumerate(mass_bins.items()):
         ax = axes[i]
         ax.hist(truth[key], bins=bins, density=True, color='gray', alpha=0.4, label='True color (Hydro)')
         for label, colors, kwargs in preds:
-            ax.hist(colors[key], bins=bins, density=True, histtype='step', linewidth=2, label=label, **kwargs)
+            ax.hist(colors[key], bins=bins, density=True, label=label, **{'histtype': 'step', 'linewidth': 2, **kwargs})
         ax.axvline(color_cut, color='k', linestyle='--')
-        ax.set_title(fr'${low} \leq \log(M_*/h^{{-1}}M_\odot) < {high}$')
+        ax.set_title(fr'{title_prefix}${low} \leq \log(M_*/h^{{-1}}M_\odot) < {high}$')
         ax.set_xlabel(r'$g - i$ color')
         ax.set_ylabel('Normalized frequency')
         if i == 0:

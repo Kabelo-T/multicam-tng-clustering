@@ -5,6 +5,7 @@ import pickle
 from scipy.stats import spearmanr, ks_2samp
 import stats
 import cam
+import plot
 import paths
 from constants import TNG_H, LBOX, HYDRO_STELLAR_MASS_MIN, MASS_BIN_EDGES
 from halotools.mock_observables import return_xyz_formatted_array
@@ -169,27 +170,16 @@ print(f"\nSaved diagnostics to {diagnostics_file}")
 
 
 ### Histogram of color vs. predicted color ###
-fig0 = plt.figure(figsize=(18, 4))
-
-for i, key in enumerate(mass_bins.keys()):
-    plt.subplot(1, len(mass_bins), i+1)
-
-    res = results[key]
-    plt.hist(res['hydro']['color'], bins=40, density=True, alpha=0.4, label='True color (Hydro)')
-    plt.hist(res['cam']['color_pred_cam'], bins=40, density=True, histtype='step', linewidth=2, label='CAM')
-    plt.hist(res['cam']['color_pred_mcam'], bins=40, density=True, histtype='step', linewidth=2, linestyle='--', label='MultiCAM')
-    if RUN_SAMPLING:
-        plt.hist(res['color_pred_samp_draws'][0], bins=40, density=True, histtype='step', linewidth=2, linestyle=':', label='MultiCAM Sampling (1 draw)')
-    plt.axvline(COLOR_CUT, color='k', linestyle='--')
-    low, high = mass_bins[key]
-    plt.title(fr'${low} \leq \log(M_*/h^{{-1}}M_\odot) < {high}$')
-    plt.xlabel(r'$g - i$ color')
-    plt.ylabel('Normalized frequency')
-
-    if i == 0:
-        plt.legend()
-
-plt.tight_layout()
+color_preds = [('CAM', {key: res['cam']['color_pred_cam'] for key, res in results.items()}, {'color': 'C1'}),
+               ('MultiCAM', {key: res['cam']['color_pred_mcam'] for key, res in results.items()},
+                {'color': 'C2', 'linestyle': '--'})]
+if RUN_SAMPLING:
+    color_preds.append(('MultiCAM Sampling (1 draw)',
+                        {key: res['color_pred_samp_draws'][0] for key, res in results.items()},
+                        {'color': 'C3', 'linestyle': ':'}))
+fig0 = plot.color_hist_by_bin(mass_bins, {key: res['hydro']['color'] for key, res in results.items()},
+                              color_preds, COLOR_CUT,
+                              np.linspace(hydro_full['g-i'].min(), hydro_full['g-i'].max(), 40))
 plt.show()
 
 
@@ -307,55 +297,26 @@ print("\nTPCF computed for all bins.")
 ### Plot results: xi(r) and ratio to hydro truth ###
 # CAM and MultiCAM points are offset slightly in r so their jackknife error bars don't overlap
 r_cam, r_mcam = rbin_centers * 0.97, rbin_centers * 1.03
-fig2, axes = plt.subplots(2, len(mass_bins), figsize=(19, 9), sharex=True, sharey='row',
-                          gridspec_kw={'height_ratios': [3, 1]})
-for i, key in enumerate(mass_bins.keys()):
-    (xi_red_hydro, xi_blue_hydro), (cov_red_hydro, cov_blue_hydro) = tpcf_results['hydro'][i]
-    (xi_red_cam, xi_blue_cam), (cov_red_cam, cov_blue_cam) = tpcf_results['cam'][i]
-    (xi_red_mcam, xi_blue_mcam), (cov_red_mcam, cov_blue_mcam) = tpcf_results['mcam'][i]
-    samp_red, samp_blue = tpcf_results['mcam_samp'][i] if RUN_SAMPLING else (None, None)
-
-    low, high = mass_bins[key]
-    ax, rax = axes[0, i], axes[1, i]
-
-    for color, xi_hydro, cov_hydro, xi_cam, cov_cam, xi_mcam, cov_mcam, samp in [
-        ('red', xi_red_hydro, cov_red_hydro, xi_red_cam, cov_red_cam, xi_red_mcam, cov_red_mcam, samp_red),
-        ('blue', xi_blue_hydro, cov_blue_hydro, xi_blue_cam, cov_blue_cam, xi_blue_mcam, cov_blue_mcam, samp_blue),
-    ]:
-        err = stats.compute_tpcf_jackknife_errors(cov_hydro)
-        err_cam = stats.compute_tpcf_jackknife_errors(cov_cam)
-        err_mcam = stats.compute_tpcf_jackknife_errors(cov_mcam)
+fig2, axes = plot.tpcf_ratio_grid(len(mass_bins))
+for i in range(len(mass_bins)):
+    for c, (color, truth_color, samp_color) in enumerate([('red', 'gray', 'magenta'), ('blue', 'k', 'cyan')]):
         label = color.capitalize()
-        truth_color = 'gray' if color == 'red' else 'k'
+        curves = [{'r': r_cam, 'xi': tpcf_results['cam'][i][0][c],
+                   'err': stats.compute_tpcf_jackknife_errors(tpcf_results['cam'][i][1][c]),
+                   'color': color, 'marker': 's', 'linestyle': '--', 'label': fr'Prediction {label}: CAM $\xi(r)$'},
+                  {'r': r_mcam, 'xi': tpcf_results['mcam'][i][0][c],
+                   'err': stats.compute_tpcf_jackknife_errors(tpcf_results['mcam'][i][1][c]),
+                   'color': color, 'marker': 'x', 'linestyle': '-', 'label': fr'Prediction {label}: MultiCAM $\xi(r)$'}]
+        if RUN_SAMPLING:
+            xi_s, xi_s_lo, xi_s_hi = tpcf_results['mcam_samp'][i][c]
+            curves.append({'median': xi_s, 'lo': xi_s_lo, 'hi': xi_s_hi, 'color': samp_color,
+                           'label': fr'Prediction {label}: MultiCAM Sampling $\xi(r)$ (median of {N_SAMPLES})'})
 
-        ax.plot(rbin_centers, xi_hydro, marker='o', color=truth_color, label=fr'Truth {label}: TNG100 Hydro $\xi(r)$')
-        ax.fill_between(rbin_centers, xi_hydro - err, xi_hydro + err, color=truth_color, alpha=0.2)
-        ax.errorbar(r_cam, xi_cam, yerr=err_cam, marker='s', color=color, linestyle='--', capsize=2, label=fr'Prediction {label}: CAM $\xi(r)$')
-        ax.errorbar(r_mcam, xi_mcam, yerr=err_mcam, marker='x', color=color, linestyle='-', capsize=2, label=fr'Prediction {label}: MultiCAM $\xi(r)$')
-        if samp is not None:
-            xi_s, xi_s_lo, xi_s_hi = samp
-            ax.plot(rbin_centers, xi_s, color='magenta' if color == 'red' else 'cyan', linestyle='-.', label=fr'Prediction {label}: MultiCAM Sampling $\xi(r)$ (median of {N_SAMPLES})')
-            ax.fill_between(rbin_centers, xi_s_lo, xi_s_hi, color='magenta' if color == 'red' else 'cyan', alpha=0.2)
+        plot.tpcf_ratio_panel(axes[0, i], axes[1, i], rbin_centers, tpcf_results['hydro'][i][0][c],
+                              stats.compute_tpcf_jackknife_errors(tpcf_results['hydro'][i][1][c]),
+                              fr'Truth {label}: TNG100 Hydro $\xi(r)$', truth_color, curves)
 
-        rax.fill_between(rbin_centers, 1 - err / xi_hydro, 1 + err / xi_hydro, color=truth_color, alpha=0.2)
-        rax.errorbar(r_cam, xi_cam / xi_hydro, yerr=err_cam / xi_hydro, marker='s', color=color, linestyle='--', capsize=2)
-        rax.errorbar(r_mcam, xi_mcam / xi_hydro, yerr=err_mcam / xi_hydro, marker='x', color=color, linestyle='-', capsize=2)
-        if samp is not None:
-            rax.plot(rbin_centers, xi_s / xi_hydro, color='magenta' if color == 'red' else 'cyan', linestyle='-.')
-
-    rax.axhline(1, color='k', linewidth=0.8)
-    ax.set_xscale('log')
-    ax.set_yscale('log')
-    ax.set_title(fr'${low} \leq \log(M_*/h^{{-1}}M_\odot) < {high}$')
-    rax.set_xlabel(r'$r \, [\mathrm{Mpc}/h]$')
-    if i == 0:
-        ax.set_ylabel(r'$\xi(r)$')
-        rax.set_ylabel(r'$\xi_{\rm pred} / \xi_{\rm hydro}$')
-    if i == len(mass_bins) - 1:
-        ax.legend(fontsize=8)
-
-axes[1, 0].set_ylim(0.5, 1.5)
-plt.subplots_adjust(wspace=0, hspace=0, left=0.05, right=0.95, bottom=0.1, top=0.9)
+plot.finish_tpcf_ratio_grid(fig2, axes, mass_bins)
 plt.show()
 
 figure_names = {
@@ -364,13 +325,7 @@ figure_names = {
     f'mcam_vs_cam_color_scatter{suffix}': fig1,
     f'mcam_vs_cam_red_blue_tpcf{suffix}': fig2,
 }
-paths.FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-png_filenames = []
-for name, fig in figure_names.items():
-    filename = paths.FIGURES_DIR / f'{name}.png'
-    fig.savefig(filename, format='png', bbox_inches='tight', pad_inches=.25)
-    plt.close(fig)
-    png_filenames.append(str(filename))
+png_filenames = plot.save_named_figures(figure_names)
 print(f'\nFigures saved as PNG files: {png_filenames}')
 
 with open(paths.CACHE_DIR / f'tpcf_results_mcam_vs_cam{suffix}.pkl', 'wb') as f:
