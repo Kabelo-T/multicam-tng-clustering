@@ -20,6 +20,9 @@ from multicam.multicam import MultiCAM, MultiCamSampling
 #   'sham': SHAM of log mpeak onto the hydro stellar mass distribution
 #   'mcam': MultiCAM (log mpeak -> log M*), fit and applied on the full sample. Without
 #           sampling, one feature and one target is a rank-match, so this reproduces SHAM.
+# N_MSTAR_DRAWS sets how the MultiCAM M* is drawn:
+#   0: deterministic MultiCAM (reproduces SHAM)
+#   1: one MultiCamSampling draw (seeded with MSTAR_SEED), i.e. SHAM with scatter at fixed mpeak
 #
 # Stage 2 (color): in each predicted-M* bin, one MultiCAM (features -> g-i) per feature set is
 # fit on the galaxies in that bin (their features and true g-i) and applied to the same galaxies.
@@ -36,7 +39,8 @@ from multicam.multicam import MultiCAM, MultiCamSampling
 # bin it was fit on, so each bin's predicted color distribution is the same for every feature
 # set; the sets differ in which galaxies get which color, i.e. in the clustering. With
 # RUN_SAMPLING, MultiCamSampling adds the conditional color scatter: histograms are pooled over
-# N_SAMPLES draws and xi(r) uses the first N_TPCF_DRAWS draws. Stage 1 is not sampled.
+# N_SAMPLES draws and xi(r) uses the first N_TPCF_DRAWS draws. RUN_SAMPLING only affects
+# stage 2; stage-1 sampling is set by N_MSTAR_DRAWS.
 
 COLOR_CUT = 0.85
 N_THREADS = 16
@@ -50,8 +54,13 @@ JACKKNIFE_NSUB = 3
 # MultiCamSampling (color scatter) mode; slow because of the N_TPCF_DRAWS tpcf draws per set.
 # Set from the environment (e.g. mcam_two_stage.sbatch) with RUN_SAMPLING=True
 RUN_SAMPLING = os.environ.get('RUN_SAMPLING', 'False') == 'True'
+# Stage-1 MultiCAM M* draws (see header); set from the environment with N_MSTAR_DRAWS=1
+N_MSTAR_DRAWS = int(os.environ.get('N_MSTAR_DRAWS', '0'))
+if N_MSTAR_DRAWS not in (0, 1):
+    raise NotImplementedError('N_MSTAR_DRAWS > 1 (many stage-1 draws) is not implemented yet')
+MSTAR_SEED = 42
 MSTAR_METHODS = ['sham', 'mcam']
-MSTAR_LABELS = {'sham': 'SHAM', 'mcam': 'MultiCAM'}
+MSTAR_LABELS = {'sham': 'SHAM', 'mcam': 'MultiCAM' if N_MSTAR_DRAWS == 0 else 'MultiCAM (1 draw)'}
 MAH_COLS = [f'mpeak_mah{ii}' for ii in range(100)]
 FEATURE_SETS = {'z12': ['z12'],
                 'z12_mpeak': ['z12', 'logMpeak'],
@@ -88,9 +97,17 @@ log_mstar_true = hydro_full['logStellarMass'].to_numpy()
 ### Stage 1: stellar mass from log mpeak ###
 hydro_full['logStellarMass_sham'] = sham.sham(hydro_full['logMpeak'].to_numpy(), log_mstar_true)
 
-model_mstar = MultiCAM(1, 1)
-model_mstar.fit(hydro_full[['logMpeak']].to_numpy(), hydro_full[['logStellarMass']].to_numpy())
-hydro_full['logStellarMass_mcam'] = model_mstar.predict(hydro_full[['logMpeak']].to_numpy())[:, 0]
+x_mstar = hydro_full[['logMpeak']].to_numpy()
+if N_MSTAR_DRAWS == 0:
+    model_mstar = MultiCAM(1, 1)
+    model_mstar.fit(x_mstar, hydro_full[['logStellarMass']].to_numpy())
+    hydro_full['logStellarMass_mcam'] = model_mstar.predict(x_mstar)[:, 0]
+else:
+    # sample() breaks ties in mpeak with the global numpy RNG, so seed it as well as the model's
+    np.random.seed(MSTAR_SEED)
+    model_mstar = MultiCamSampling(1, 1, rng=np.random.default_rng(MSTAR_SEED))
+    model_mstar.fit(x_mstar, hydro_full[['logStellarMass']].to_numpy())
+    hydro_full['logStellarMass_mcam'] = model_mstar.sample(x_mstar)[:, 0]
 
 mstar_diag = {}
 for method in MSTAR_METHODS:
@@ -180,7 +197,7 @@ for key, (low, high) in mass_bins.items():
 
 print("\nPredictions complete for all bins.")
 
-suffix = '_with_sampling' if RUN_SAMPLING else ''
+suffix = ('_mstar_1draw' if N_MSTAR_DRAWS == 1 else '') + ('_with_sampling' if RUN_SAMPLING else '')
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 diagnostics_df = pd.DataFrame(diagnostics)
 for method in MSTAR_METHODS:

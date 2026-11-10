@@ -14,6 +14,7 @@
 # Usage:
 #   sbatch mcam_two_stage.sbatch                                                         # no sampling
 #   sbatch --time=06:00:00 --export=ALL,RUN_SAMPLING=True mcam_two_stage.sbatch        # MultiCamSampling
+#   sbatch --export=ALL,N_MSTAR_DRAWS=1 mcam_two_stage.sbatch                           # one sampled MultiCAM M* draw
 # Outputs go to tests/mcam_two_stage/
 
 set -euo pipefail
@@ -26,7 +27,8 @@ conda activate tng311
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export MPLBACKEND=Agg
 export RUN_SAMPLING=${RUN_SAMPLING:-False}
+export N_MSTAR_DRAWS=${N_MSTAR_DRAWS:-0}
 
-echo "RUN_SAMPLING=$RUN_SAMPLING"
+echo "RUN_SAMPLING=$RUN_SAMPLING N_MSTAR_DRAWS=$N_MSTAR_DRAWS"
 
 python3 -u mcam_two_stage.py
