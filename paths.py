@@ -17,6 +17,8 @@ REPO_ROOT = Path(__file__).resolve().parent
 DATA_DIR = REPO_ROOT / "data"
 CACHE_DIR = DATA_DIR / "cache_files"
 FIGURES_DIR = REPO_ROOT / "figures"
+# Outputs (figures, CSV diagnostics, pickles) from the mcam_*.py experiment scripts.
+RESULTS_DIR = REPO_ROOT / "results"
 
 # --- raw TNG100 download subdirectories under data/ ---
 HYDRO_RAW_DIR = DATA_DIR / "hydro_data"
