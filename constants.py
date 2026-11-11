@@ -1,6 +1,6 @@
 """Shared physical/simulation constants for proj-2pt-surf-2026."""
 
-TNG_H = 0.7
+TNG_H = 0.6774
 
 # TNG100 box size, converted to Mpc/h.
 LBOX = 110.7 * TNG_H
