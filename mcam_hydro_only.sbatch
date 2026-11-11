@@ -13,7 +13,7 @@
 # Usage:
 #   sbatch mcam_hydro_only.sbatch                                                        # no sampling
 #   sbatch --time=04:00:00 --export=ALL,RUN_SAMPLING=True mcam_hydro_only.sbatch       # MultiCamSampling
-# Outputs go to tests/mcam_mstar_color/
+# Outputs go to results/mcam_mstar_color/
 
 set -euo pipefail
 

@@ -2,10 +2,23 @@ import numpy as np
 
 
 def qt(x, y):
-    """Phil's QT Function
-    - qt performs a quantile transformation from x -> y. (i.e. what values
-    would the values in x have if they had the same ranks within the y
-    distribution).
+    """Quantile-transform x onto the distribution of y (Phil's QT).
+
+    Each value in x is replaced by the value at the same quantile of y, so the
+    output keeps the rank order of x but follows the distribution of y.
+
+    Parameters
+    ----------
+    x : array_like
+        Values to transform (e.g. halo vpeak). Needs at least 2 elements.
+    y : array_like
+        Target distribution (e.g. stellar mass). Needs at least 2 elements.
+
+    Returns
+    -------
+    ndarray
+        Transformed x, same length as x. Interpolates linearly in sorted y when
+        len(x) != len(y).
     """
 
     # get ranks for each element of x

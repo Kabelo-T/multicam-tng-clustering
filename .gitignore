@@ -173,6 +173,7 @@ data/
 *.csv
 *.dat
 figures/
+results/
 tests/**/*.png
 
 # Local scratch / editor

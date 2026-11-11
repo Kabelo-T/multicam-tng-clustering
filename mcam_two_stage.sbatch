@@ -16,7 +16,7 @@
 #   sbatch --time=06:00:00 --export=ALL,RUN_SAMPLING=True mcam_two_stage.sbatch        # MultiCamSampling
 #   sbatch --export=ALL,N_MSTAR_DRAWS=1 mcam_two_stage.sbatch                           # one sampled MultiCAM M* draw
 #   sbatch --export=ALL,N_MSTAR_DRAWS=25 mcam_two_stage.sbatch                          # 25 sampled MultiCAM M* draws
-# Outputs go to tests/mcam_two_stage/
+# Outputs go to results/mcam_two_stage/
 
 set -euo pipefail
 

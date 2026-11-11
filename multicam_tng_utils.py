@@ -4,33 +4,10 @@ import pickle
 
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
 from constants import TNG_H
 from stats import generate_randoms  # noqa: F401 (re-exported for existing importers)
 
 SNAPS = np.arange(0, 100, 1)
-
-
-def get_mah_interpolated(mvir: np.ndarray):
-    assert mvir.shape[1] == 100
-    assert mvir.ndim == 2
-
-    n_snaps = 100
-    n_haloes = mvir.shape[0]
-    mah = np.zeros((n_haloes, n_snaps)) * np.nan
-
-    for ii in tqdm(range(n_haloes)):
-        mdm = mvir[ii, :]
-        _mask = mdm == 0
-        mdm[_mask] = np.nan
-
-        # linearly interpolate nan values
-        # maybe want PCH interpolation here instead
-        mdm = pd.Series(mdm)
-        mdm = mdm.interpolate(method="linear", limit_direction="both", axis=0)
-        mah[ii] = mdm.values
-
-    return mah
 
 
 def get_mpeak_from_mah(mah: np.ndarray):
@@ -77,12 +54,21 @@ def convert_tng_mass(gmass):
 
 
 def get_vmax_over_vvir(cat: pd.DataFrame):
-    """Compute vmax / vvir from catalog columns."""
-    # compute vvir and create new column
+    """Compute vmax / vvir from catalog columns.
 
-    # ensure units of mvir is in units of Msun / h
-    mvir = 10 ** cat["Mvir"].values / TNG_H  # og units: log10(msun)
-    rvir = cat["Rvir"].values / TNG_H  # og units: kpc
+    Parameters
+    ----------
+    cat : pandas.DataFrame
+        Needs 'Mvir' [log10 Msun], 'Rvir' [kpc] and 'Vmax_DM' [km/s].
+
+    Returns
+    -------
+    pandas.Series
+        vmax / vvir (dimensionless; h cancels in vvir = sqrt(G M / R)).
+    """
+    # Msun -> Msun/h and kpc -> kpc/h: multiply by h.
+    mvir = 10 ** cat["Mvir"].values * TNG_H
+    rvir = cat["Rvir"].values * TNG_H
     vvir = get_vvir(rvir, mvir)
 
     return cat["Vmax_DM"] / vvir

@@ -56,7 +56,7 @@ FEATURE_LABELS = {'z12': r'MultiCAM ($z_{1/2}$)',
                   'mah_mpeak': r'MultiCAM (MAH + $M_{\rm peak}$)',
                   'z12_mah': r'MultiCAM ($z_{1/2}$ + MAH)'}
 SET_COLORS = dict(zip(FEATURE_SETS, ['C0', 'C1', 'C2', 'C3']))
-OUT_DIR = paths.REPO_ROOT / 'tests' / 'mcam_mstar_color'
+OUT_DIR = paths.RESULTS_DIR / 'mcam_mstar_color'
 OUT_NAME = 'mcam_mstar_color'
 
 ## Load data ###

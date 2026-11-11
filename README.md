@@ -1,5 +1,7 @@
 # multicam-tng-clustering
 
+[![tests](https://github.com/Kabelo-T/multicam-tng-clustering/actions/workflows/tests.yml/badge.svg)](https://github.com/Kabelo-T/multicam-tng-clustering/actions/workflows/tests.yml)
+
 Predicting galaxy properties (stellar mass, `g-i` color) from dark-matter halo assembly histories in
 IllustrisTNG100, and testing the predictions against the two-point clustering of the full hydrodynamic
 simulation.
