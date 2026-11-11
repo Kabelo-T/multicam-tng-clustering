@@ -1,15 +1,15 @@
 import numpy as np
 import pandas as pd
 import pytest
-from constants import TNG_H
 from multicam_tng_utils import (
     convert_tng_mass, get_mpeak_from_mah, get_an_from_mpeak_mah,
     get_vvir, get_vmax_over_vvir, get_msmhmr)
 
 
 def test_convert_tng_mass():
-    # TNG unit is 1e10 Msun/h -> log10(Msun) divides by h, not multiplies.
-    assert convert_tng_mass(1.0) == pytest.approx(np.log10(1e10 / TNG_H))
+    # 1e10 Msun/h = 1e10/0.6774 Msun. Hard-coded: using TNG_H here would make
+    # the test circular (a wrong TNG_H would change both sides).
+    assert convert_tng_mass(1.0) == pytest.approx(10.169155)
     assert convert_tng_mass(0.0) == 0
 
 
