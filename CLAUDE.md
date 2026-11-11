@@ -15,7 +15,8 @@ top-level `.py` modules as a shared library.
 
 ## Running things
 
-- No `requirements.txt`/`environment.yml` exists. Key third-party deps observed across the codebase:
+- No full environment file exists (`environment-test.yml` covers only the unit tests, used by CI).
+  The working env is the `tng311` conda env. Key third-party deps observed across the codebase:
   `numpy`, `pandas`, `astropy`, `h5py`, `scikit-learn`, `halotools`, `matplotlib`, `tqdm`.
 - Raw data lives under `data/` (git-ignored, not present in the repo — must be supplied locally, e.g.
   TNG100 hydro/DMO HDF5 subhalo catalogs, merger tree `.npz` files, and derived CSV caches under
@@ -26,7 +27,9 @@ top-level `.py` modules as a shared library.
   inputs (e.g. `file_number`, `directory`, mass bin edges).
 - The MultiCAM clustering scripts (`mcam_hydro_only.py`, `mcam_vs_cam.py`) are run through Slurm with their
   matching `.sbatch` files, not on the login node — the jackknife ξ(r) runs need more CPUs than it allows.
-- No automated tests exist.
+- Unit tests live in `tests/` (pytest, synthetic data only — never `data/`). Run `python -m pytest` (in `tng311`).
+  GitHub Actions (`.github/workflows/tests.yml`) runs them on every push and PR.
+  Experiment outputs from the `mcam_*.py` scripts go in `results/` (git-ignored), not `tests/`.
 
 ## Core pipeline (read this before touching multiple files)
 
@@ -78,6 +81,8 @@ functions from different modules.
 
 ## Working in this codebase
 
+- Keep code concise and simple: short, plain functions and tests, no elaborate abstractions, helper
+  layers or defensive boilerplate. The author refactors often; simple code survives that, clever code doesn't.
 - Path handling is centralized in `paths.py` (repo-root constants for `data/`, `data/cache_files/`,
   `figures/`, etc.) — import from it rather than hardcoding path strings in `.py` files. Notebooks
   (including those in `tutorials/` and `thesis/`) still use plain relative string literals

@@ -1,0 +1,11 @@
+# Minimal env for running the unit tests (CI uses this; locally use tng311).
+name: tests
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas
+  - astropy
+  - halotools
+  - pytest
