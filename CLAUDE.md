@@ -9,7 +9,7 @@ cosmological simulation. The central question: given only dark-matter halo prope
 dark-matter-only (DMO) run, can we predict galaxy properties (stellar mass, `g-i` color) well enough to
 reproduce a full hydrodynamic (baryonic) simulation — including its two-point clustering statistics?
 
-There is no build system, package manifest, linter, or test suite — this is exploratory scientific
+There is no build system, package manifest or linter (only a small pytest suite) — this is exploratory scientific
 analysis code, not a deployable package. Work happens mostly in Jupyter notebooks that import the
 top-level `.py` modules as a shared library.
 
