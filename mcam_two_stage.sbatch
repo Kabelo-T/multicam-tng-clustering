@@ -7,14 +7,15 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=8G
 #SBATCH --time=02:00:00
-#SBATCH --output=mcam_two_stage-%j.log
-#SBATCH --error=mcam_two_stage-%j.log
+#SBATCH --output=logs/mcam_two_stage-%j.log
+#SBATCH --error=logs/mcam_two_stage-%j.log
 #SBATCH --mail-type=BEGIN,END
 
 # Usage:
 #   sbatch mcam_two_stage.sbatch                                                         # no sampling
 #   sbatch --time=06:00:00 --export=ALL,RUN_SAMPLING=True mcam_two_stage.sbatch        # MultiCamSampling
 #   sbatch --export=ALL,N_MSTAR_DRAWS=1 mcam_two_stage.sbatch                           # one sampled MultiCAM M* draw
+#   sbatch --export=ALL,N_MSTAR_DRAWS=25 mcam_two_stage.sbatch                          # 25 sampled MultiCAM M* draws
 # Outputs go to tests/mcam_two_stage/
 
 set -euo pipefail

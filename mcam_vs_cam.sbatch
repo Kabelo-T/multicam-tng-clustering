@@ -7,8 +7,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=4G
 #SBATCH --time=00:20:00
-#SBATCH --output=mcam_vs_cam-%j.log
-#SBATCH --error=mcam_vs_cam-%j.log
+#SBATCH --output=logs/mcam_vs_cam-%j.log
+#SBATCH --error=logs/mcam_vs_cam-%j.log
 #SBATCH --mail-type=BEGIN,END
 
 # Usage:

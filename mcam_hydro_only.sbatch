@@ -7,8 +7,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=8G
 #SBATCH --time=01:00:00
-#SBATCH --output=mcam_hydro_only-%j.log
-#SBATCH --error=mcam_hydro_only-%j.log
+#SBATCH --output=logs/mcam_hydro_only-%j.log
+#SBATCH --error=logs/mcam_hydro_only-%j.log
 
 # Usage:
 #   sbatch mcam_hydro_only.sbatch                                                        # no sampling

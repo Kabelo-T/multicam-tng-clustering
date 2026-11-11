@@ -23,6 +23,10 @@ from multicam.multicam import MultiCAM, MultiCamSampling
 # N_MSTAR_DRAWS sets how the MultiCAM M* is drawn:
 #   0: deterministic MultiCAM (reproduces SHAM)
 #   1: one MultiCamSampling draw (seeded with MSTAR_SEED), i.e. SHAM with scatter at fixed mpeak
+#   N > 1: N seeded draws. Stage 2 and xi(r) are rerun for every draw and shown as the median and
+#          SAMPLE_PCTILES band over draws; the first draw (the same as with N_MSTAR_DRAWS=1) also
+#          runs the single-population analysis (jackknife xi(r), per-bin diagnostics). Stage-2
+#          color sampling (RUN_SAMPLING) is not combined with this mode.
 #
 # Stage 2 (color): in each predicted-M* bin, one MultiCAM (features -> g-i) per feature set is
 # fit on the galaxies in that bin (their features and true g-i) and applied to the same galaxies.
@@ -56,11 +60,14 @@ JACKKNIFE_NSUB = 3
 RUN_SAMPLING = os.environ.get('RUN_SAMPLING', 'False') == 'True'
 # Stage-1 MultiCAM M* draws (see header); set from the environment with N_MSTAR_DRAWS=1
 N_MSTAR_DRAWS = int(os.environ.get('N_MSTAR_DRAWS', '0'))
-if N_MSTAR_DRAWS not in (0, 1):
-    raise NotImplementedError('N_MSTAR_DRAWS > 1 (many stage-1 draws) is not implemented yet')
+if N_MSTAR_DRAWS > 1 and RUN_SAMPLING:
+    raise ValueError('RUN_SAMPLING is not supported with N_MSTAR_DRAWS > 1')
 MSTAR_SEED = 42
 MSTAR_METHODS = ['sham', 'mcam']
-MSTAR_LABELS = {'sham': 'SHAM', 'mcam': 'MultiCAM' if N_MSTAR_DRAWS == 0 else 'MultiCAM (1 draw)'}
+# with many draws, the single-population analysis uses the first draw
+MSTAR_LABELS = {'sham': 'SHAM',
+                'mcam': {0: 'MultiCAM', 1: 'MultiCAM (1 draw)'}.get(N_MSTAR_DRAWS, 'MultiCAM (draw 1)')}
+MSTAR_DRAWS_LABEL = f'MultiCAM ({N_MSTAR_DRAWS} draws)'
 MAH_COLS = [f'mpeak_mah{ii}' for ii in range(100)]
 FEATURE_SETS = {'z12': ['z12'],
                 'z12_mpeak': ['z12', 'logMpeak'],
@@ -107,7 +114,9 @@ else:
     np.random.seed(MSTAR_SEED)
     model_mstar = MultiCamSampling(1, 1, rng=np.random.default_rng(MSTAR_SEED))
     model_mstar.fit(x_mstar, hydro_full[['logStellarMass']].to_numpy())
-    hydro_full['logStellarMass_mcam'] = model_mstar.sample(x_mstar)[:, 0]
+    # (N_MSTAR_DRAWS, N_galaxies) sampled log M*; the first draw is the N_MSTAR_DRAWS=1 draw
+    mstar_draws = np.array([model_mstar.sample(x_mstar)[:, 0] for _ in range(N_MSTAR_DRAWS)])
+    hydro_full['logStellarMass_mcam'] = mstar_draws[0]
 
 mstar_diag = {}
 for method in MSTAR_METHODS:
@@ -128,6 +137,17 @@ print(f"\nSHAM vs MultiCAM log M*: max |difference| = {max_diff:.2e} dex, "
 
 
 ### Stage 2: color within each predicted stellar-mass bin ###
+def predict_colors(pop):
+    """Adds color_pred_{set} to pop: per feature set, MultiCAM fit on pop's features and true g-i,
+    applied to pop"""
+    y_train = pop[['g-i']].to_numpy()
+    for name, cols in FEATURE_SETS.items():
+        x = pop[cols].to_numpy()
+        model = MultiCAM(len(cols), 1)
+        model.fit(x, y_train)
+        pop[f'color_pred_{name}'] = model.predict(x)[:, 0]
+
+
 results = {}
 diagnostics = []
 
@@ -156,14 +176,11 @@ for key, (low, high) in mass_bins.items():
         diag[f'spearman_z12_gi_{method}'] = spearmanr(pop['z12'], pop['g-i']).statistic
         print(f"  {MSTAR_LABELS[method]}: N = {len(pop)}, true-bin overlap = {diag[f'overlap_frac_{method}']:.3f}")
 
+        predict_colors(pop)
         y_train = pop[['g-i']].to_numpy()
         for name, cols in FEATURE_SETS.items():
-            x = pop[cols].to_numpy()
-            model = MultiCAM(len(cols), 1)
-            model.fit(x, y_train)
-            pop[f'color_pred_{name}'] = model.predict(x)[:, 0]
-
             if RUN_SAMPLING:
+                x = pop[cols].to_numpy()
                 model_samp = MultiCamSampling(len(cols), 1)
                 model_samp.fit(x, y_train)
                 # population is fixed, so each draw is just the predicted colors of pop
@@ -197,7 +214,50 @@ for key, (low, high) in mass_bins.items():
 
 print("\nPredictions complete for all bins.")
 
-suffix = ('_mstar_1draw' if N_MSTAR_DRAWS == 1 else '') + ('_with_sampling' if RUN_SAMPLING else '')
+
+### Stage 2 for every MultiCAM M* draw ###
+# per bin, one population per draw: the galaxies the draw puts in the bin, with their true g-i
+# and the colors predicted by stage 2 fit on that population
+mstar_draw_pops = {key: [] for key in mass_bins}
+if N_MSTAR_DRAWS > 1:
+    pred_cols = [f'color_pred_{name}' for name in FEATURE_SETS]
+    for d, draw in enumerate(mstar_draws):
+        for key, (low, high) in mass_bins.items():
+            pop = hydro_full[(draw >= low) & (draw < high)].copy()
+            predict_colors(pop)
+            mstar_draw_pops[key].append(pop[['x', 'y', 'z', 'is_sub', 'g-i', *pred_cols]])
+        print(f"  stage 2 done for M* draw {d + 1} / {N_MSTAR_DRAWS}")
+
+    # mean and spread over draws of the per-bin statistics
+    for diag, (key, res) in zip(diagnostics, results.items()):
+        pops = mstar_draw_pops[key]
+        stat_draws = {'n_mcam_draws': [len(p) for p in pops],
+                      'overlap_frac_mcam_draws': [len(p.index.intersection(res['hydro'].index)) / len(res['hydro'])
+                                                  for p in pops]}
+        for name in FEATURE_SETS:
+            reds = [p[f'color_pred_{name}'] > COLOR_CUT for p in pops]
+            stat_draws[f'red_frac_mcam_{name}_draws'] = [red.mean() for red in reds]
+            stat_draws[f'sat_frac_red_mcam_{name}_draws'] = [p.loc[red, 'is_sub'].mean() for p, red in zip(pops, reds)]
+            stat_draws[f'sat_frac_blue_mcam_{name}_draws'] = [p.loc[~red, 'is_sub'].mean()
+                                                              for p, red in zip(pops, reds)]
+        for stat, values in stat_draws.items():
+            diag[f'{stat}_mean'] = np.mean(values)
+            diag[f'{stat}_std'] = np.std(values)
+
+        print(f"\n{key}, {MSTAR_DRAWS_LABEL} (mean ± std over draws): "
+              f"N = {diag['n_mcam_draws_mean']:.0f} ± {diag['n_mcam_draws_std']:.0f}, "
+              f"true-bin overlap = {diag['overlap_frac_mcam_draws_mean']:.3f} ± {diag['overlap_frac_mcam_draws_std']:.3f}")
+        print("    red fraction:                     " + ", ".join(
+            f"{name} {diag[f'red_frac_mcam_{name}_draws_mean']:.3f} ± {diag[f'red_frac_mcam_{name}_draws_std']:.3f}"
+            for name in FEATURE_SETS))
+        print("    satellite fraction (red / blue):  " + ", ".join(
+            f"{name} {diag[f'sat_frac_red_mcam_{name}_draws_mean']:.3f} / "
+            f"{diag[f'sat_frac_blue_mcam_{name}_draws_mean']:.3f}" for name in FEATURE_SETS))
+
+    print(f"\nStage 2 complete for all {N_MSTAR_DRAWS} M* draws.")
+
+suffix = ({0: '', 1: '_mstar_1draw'}.get(N_MSTAR_DRAWS, f'_mstar_{N_MSTAR_DRAWS}draws')
+          + ('_with_sampling' if RUN_SAMPLING else ''))
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 diagnostics_df = pd.DataFrame(diagnostics)
 for method in MSTAR_METHODS:
@@ -240,21 +300,28 @@ plt.show()
 mode_label = f' (sampling, {N_SAMPLES} draws)' if RUN_SAMPLING else ''
 fig_color, axes = plt.subplots(len(MSTAR_METHODS), len(mass_bins), figsize=(18, 4 * len(MSTAR_METHODS)))
 for row, method in enumerate(MSTAR_METHODS):
+    # with many M* draws, the MultiCAM row pools the populations of all draws
+    if method == 'mcam' and N_MSTAR_DRAWS > 1:
+        pops = {key: pd.concat(mstar_draw_pops[key]) for key in mass_bins}
+        method_label = MSTAR_DRAWS_LABEL
+    else:
+        pops = {key: res[method] for key, res in results.items()}
+        method_label = MSTAR_LABELS[method]
     color_preds = []
     for name in FEATURE_SETS:
         if RUN_SAMPLING:
             colors = {key: res['samp_draws'][f'{method}_{name}'].ravel() for key, res in results.items()}
         else:
-            colors = {key: res[method][f'color_pred_{name}'] for key, res in results.items()}
+            colors = {key: pop[f'color_pred_{name}'] for key, pop in pops.items()}
         color_preds.append((FEATURE_LABELS[name] + mode_label, colors, {'color': SET_COLORS[name]}))
     # reference: the true colors of the galaxies the method puts in each bin, which the
     # deterministic color MultiCAM is fit on; gray vs. black is the stage-1 bin membership
-    color_preds.append((f'True color of {MSTAR_LABELS[method]}-bin galaxies',
-                        {key: res[method]['g-i'] for key, res in results.items()},
+    color_preds.append((f'True color of {method_label}-bin galaxies',
+                        {key: pop['g-i'] for key, pop in pops.items()},
                         {'color': 'k', 'linewidth': 1.2}))
     plot.color_hist_by_bin(mass_bins, {key: res['hydro']['color'] for key, res in results.items()},
                            color_preds, COLOR_CUT, np.linspace(hydro_full['g-i'].min(), hydro_full['g-i'].max(), 40),
-                           axes=axes[row], title_prefix=f'{MSTAR_LABELS[method]} $M_*$: ')
+                           axes=axes[row], title_prefix=f'{method_label} $M_*$: ')
 plt.show()
 
 
@@ -336,6 +403,27 @@ for key, res in results.items():
                                 np.nanpercentile(draws, SAMPLE_PCTILES[1], axis=0)))
             tpcf_results[f'{method}_{name}_samp'].append(tuple(summary))
 
+# MultiCAM M* draws: tpcf of each draw's red/blue populations, median and percentile band across draws;
+# the per-draw xi are kept in mstar_draw_xi[set][bin] as (N_MSTAR_DRAWS, 2 colors (red, blue), n_r) arrays
+mstar_draw_xi = {}
+if N_MSTAR_DRAWS > 1:
+    for name in FEATURE_SETS:
+        tpcf_results[f'mcam_{name}_mstar_draws'] = []
+        mstar_draw_xi[name] = []
+    for key in mass_bins:
+        print(f"\nComputing TPCF over M* draws for {key}.")
+        for name in FEATURE_SETS:
+            xi_draws = []
+            for pop in mstar_draw_pops[key]:
+                red = pop[f'color_pred_{name}'] > COLOR_CUT
+                xi_draws.append((plain_tpcf(pop[red]), plain_tpcf(pop[~red])))
+            xi_draws = np.array(xi_draws)
+            mstar_draw_xi[name].append(xi_draws)
+            tpcf_results[f'mcam_{name}_mstar_draws'].append(tuple(
+                (np.nanmedian(xi_draws[:, c], axis=0),
+                 np.nanpercentile(xi_draws[:, c], SAMPLE_PCTILES[0], axis=0),
+                 np.nanpercentile(xi_draws[:, c], SAMPLE_PCTILES[1], axis=0)) for c in range(2)))
+
 print("\nTPCF computed for all bins.")
 
 
@@ -363,13 +451,19 @@ for c, color in enumerate(['red', 'blue']):
                     curves.append({'median': xi_s, 'lo': xi_s_lo, 'hi': xi_s_hi, 'color': SET_COLORS[name],
                                    'label': fr'Prediction {label}: {MSTAR_LABELS[method]} $M_*$ + '
                                             fr'{FEATURE_LABELS[name]} Sampling $\xi(r)$ (median of {N_TPCF_DRAWS})'})
+                if method == 'mcam' and N_MSTAR_DRAWS > 1:
+                    xi_s, xi_s_lo, xi_s_hi = tpcf_results[f'mcam_{name}_mstar_draws'][i][c]
+                    curves.append({'median': xi_s, 'lo': xi_s_lo, 'hi': xi_s_hi, 'color': SET_COLORS[name],
+                                   'label': fr'Prediction {label}: {MSTAR_DRAWS_LABEL} $M_*$ + '
+                                            fr'{FEATURE_LABELS[name]} $\xi(r)$ (median over draws)'})
 
             plot.tpcf_ratio_panel(axes[0, i], axes[1, i], rbin_centers, tpcf_results['hydro'][i][0][c],
                                   stats.compute_tpcf_jackknife_errors(tpcf_results['hydro'][i][1][c]),
                                   fr'Truth {label}: TNG100 Hydro $\xi(r)$', 'k', curves, truth_alpha=0.15)
 
+        # short method name in the titles (the legend has the draw details) so adjacent titles don't overlap
         plot.finish_tpcf_ratio_grid(fig, axes, mass_bins,
-                                    title_prefix=f'{label}, {MSTAR_LABELS[method]} $M_*$: ')
+                                    title_prefix=f"{label}, {MSTAR_LABELS[method].split(' (')[0]} $M_*$: ")
         plt.show()
         tpcf_figs[(color, method)] = fig
 
@@ -388,5 +482,6 @@ print(f'\nFigures saved as PNG files: {png_filenames}')
 # per-bin populations with their predicted colors; color draws are left out to keep it small
 results_out = {key: {k: v for k, v in res.items() if k != 'samp_draws'} for key, res in results.items()}
 with open(OUT_DIR / f'tpcf_results_{OUT_NAME}{suffix}.pkl', 'wb') as f:
-    pickle.dump({'tpcf': tpcf_results, 'rbins': rbins, 'results': results_out}, f)
+    pickle.dump({'tpcf': tpcf_results, 'rbins': rbins, 'results': results_out,
+                 'mstar_draw_xi': mstar_draw_xi}, f)
 print("\nSaved TPCF and prediction results to pickle.")
