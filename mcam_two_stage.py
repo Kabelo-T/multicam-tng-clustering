@@ -38,6 +38,10 @@ from multicam.multicam import MultiCAM, MultiCamSampling
 # mpeak_mah99 is mpeak itself (same ranks), so it is left out of 'mah_mpeak': the duplicate
 # feature makes the MultiCamSampling feature covariance singular. 'z12_mah' keeps it, so it
 # also carries mpeak.
+# MAH_FIRST_SNAP drops the MAH snapshots before it. The early snapshots are mostly tied (e.g.
+# mpeak_mah0 is 0 for ~99.7% of galaxies) and MultiCAM breaks ties by row order, which follows
+# host group and satellite status; from snapshot 10 on there are essentially no ties (see
+# mcam_mass_leak.py).
 #
 # Without sampling, the color MultiCAM maps its predictions back onto the true colors of the
 # bin it was fit on, so each bin's predicted color distribution is the same for every feature
@@ -63,6 +67,8 @@ N_MSTAR_DRAWS = int(os.environ.get('N_MSTAR_DRAWS', '0'))
 if N_MSTAR_DRAWS > 1 and RUN_SAMPLING:
     raise ValueError('RUN_SAMPLING is not supported with N_MSTAR_DRAWS > 1')
 MSTAR_SEED = 42
+# First MAH snapshot in the feature sets (see header); set from the environment with MAH_FIRST_SNAP=10
+MAH_FIRST_SNAP = int(os.environ.get('MAH_FIRST_SNAP', '0'))
 MSTAR_METHODS = ['sham', 'mcam']
 # with many draws, the single-population analysis uses the first draw
 MSTAR_LABELS = {'sham': 'SHAM',
@@ -71,12 +77,13 @@ MSTAR_DRAWS_LABEL = f'MultiCAM ({N_MSTAR_DRAWS} draws)'
 MAH_COLS = [f'mpeak_mah{ii}' for ii in range(100)]
 FEATURE_SETS = {'z12': ['z12'],
                 'z12_mpeak': ['z12', 'logMpeak'],
-                'mah_mpeak': MAH_COLS[:-1] + ['logMpeak'],
-                'z12_mah': ['z12'] + MAH_COLS}
+                'mah_mpeak': MAH_COLS[MAH_FIRST_SNAP:-1] + ['logMpeak'],
+                'z12_mah': ['z12'] + MAH_COLS[MAH_FIRST_SNAP:]}
+MAH_LABEL = 'MAH' if MAH_FIRST_SNAP == 0 else fr'MAH$_{{\geq {MAH_FIRST_SNAP}}}$'
 FEATURE_LABELS = {'z12': r'MultiCAM ($z_{1/2}$)',
                   'z12_mpeak': r'MultiCAM ($z_{1/2}$ + $M_{\rm peak}$)',
-                  'mah_mpeak': r'MultiCAM (MAH + $M_{\rm peak}$)',
-                  'z12_mah': r'MultiCAM ($z_{1/2}$ + MAH)'}
+                  'mah_mpeak': fr'MultiCAM ({MAH_LABEL} + $M_{{\rm peak}}$)',
+                  'z12_mah': fr'MultiCAM ($z_{{1/2}}$ + {MAH_LABEL})'}
 SET_COLORS = dict(zip(FEATURE_SETS, ['C0', 'C1', 'C2', 'C3']))
 MSTAR_COLORS = {'sham': 'C4', 'mcam': 'C5'}
 OUT_DIR = paths.REPO_ROOT / 'tests' / 'mcam_two_stage'
@@ -257,6 +264,7 @@ if N_MSTAR_DRAWS > 1:
     print(f"\nStage 2 complete for all {N_MSTAR_DRAWS} M* draws.")
 
 suffix = ({0: '', 1: '_mstar_1draw'}.get(N_MSTAR_DRAWS, f'_mstar_{N_MSTAR_DRAWS}draws')
+          + (f'_mah_from{MAH_FIRST_SNAP}' if MAH_FIRST_SNAP else '')
           + ('_with_sampling' if RUN_SAMPLING else ''))
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 diagnostics_df = pd.DataFrame(diagnostics)

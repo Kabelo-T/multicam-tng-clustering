@@ -16,6 +16,7 @@
 #   sbatch --time=06:00:00 --export=ALL,RUN_SAMPLING=True mcam_two_stage.sbatch        # MultiCamSampling
 #   sbatch --export=ALL,N_MSTAR_DRAWS=1 mcam_two_stage.sbatch                           # one sampled MultiCAM M* draw
 #   sbatch --export=ALL,N_MSTAR_DRAWS=25 mcam_two_stage.sbatch                          # 25 sampled MultiCAM M* draws
+#   sbatch --export=ALL,MAH_FIRST_SNAP=10 mcam_two_stage.sbatch                         # MAH from snapshot 10 (no ties)
 # Outputs go to tests/mcam_two_stage/
 
 set -euo pipefail
@@ -29,7 +30,8 @@ export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export MPLBACKEND=Agg
 export RUN_SAMPLING=${RUN_SAMPLING:-False}
 export N_MSTAR_DRAWS=${N_MSTAR_DRAWS:-0}
+export MAH_FIRST_SNAP=${MAH_FIRST_SNAP:-0}
 
-echo "RUN_SAMPLING=$RUN_SAMPLING N_MSTAR_DRAWS=$N_MSTAR_DRAWS"
+echo "RUN_SAMPLING=$RUN_SAMPLING N_MSTAR_DRAWS=$N_MSTAR_DRAWS MAH_FIRST_SNAP=$MAH_FIRST_SNAP"
 
 python3 -u mcam_two_stage.py
